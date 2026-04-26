@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Sprint Timer – ZIEL</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #0a0a0a;
+    --surface: #111;
+    --border: #1e1e1e;
+    --accent: #e8ff47;
+    --accent2: #ff4747;
+    --text: #f0f0f0;
+    --muted: #555;
+    --green: #47ff8a;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .logo {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 22px;
+    letter-spacing: 3px;
+    color: var(--accent);
+  }
+
+  .role-badge {
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: 2px;
+    background: rgba(232,255,71,0.05);
+    color: var(--accent);
+    border-color: rgba(232,255,71,0.3);
+  }
+
+  .connection-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+
+  .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.3s;
+  }
+  .dot.online { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse-dot 2s infinite; }
+  .dot.active { background: var(--accent2); box-shadow: 0 0 12px var(--accent2); animation: pulse-dot 0.5s infinite; }
+
+  @keyframes pulse-dot {
+    0%,100% { opacity:1; } 50% { opacity:0.3; }
+  }
+
+  .session-id-row {
+    padding: 10px 24px;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .session-code {
+    color: var(--accent);
+    font-size: 13px;
+    letter-spacing: 3px;
+    font-weight: 500;
+  }
+
+  /* Camera area */
+  .camera-section {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  #video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transform: scaleX(-1); /* mirror for rear cam look */
+    filter: brightness(0.95);
+  }
+
+  #canvas {
+    display: none;
+  }
+
+  /* Detection zone overlay */
+  .detection-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  /* Detection zone line - this is where athlete should cross */
+  .finish-line {
+    position: absolute;
+    top: 0; bottom: 0;
+    left: 50%;
+    width: 3px;
+    background: rgba(232, 255, 71, 0.8);
+    box-shadow: 0 0 20px rgba(232, 255, 71, 0.6);
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+
+  .finish-line.triggered {
+    background: rgba(255, 71, 71, 0.9);
+    box-shadow: 0 0 30px rgba(255, 71, 71, 0.8);
+  }
+
+  .finish-line-label {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.7);
+    color: var(--accent);
+    font-size: 9px;
+    letter-spacing: 2px;
+    padding: 4px 8px;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+
+  /* Motion bars - visual indicator of detected movement */
+  .motion-bars {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    right: 12px;
+    height: 40px;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    pointer-events: none;
+  }
+
+  .motion-bar {
+    flex: 1;
+    background: rgba(232, 255, 71, 0.5);
+    border-radius: 1px 1px 0 0;
+    min-height: 2px;
+    transition: height 0.05s;
+  }
+
+  /* Status overlay */
+  .cam-status {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0,0,0,0.7);
+    padding: 6px 10px;
+    border-radius: 3px;
+    font-size: 10px;
+    letter-spacing: 1px;
+  }
+
+  .cam-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.2s;
+  }
+  .cam-dot.live { background: var(--accent2); animation: pulse-dot 1s infinite; }
+  .cam-dot.detecting { background: var(--green); }
+
+  /* Bottom panel */
+  .bottom-panel {
+    flex-shrink: 0;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    padding: 16px 24px 24px;
+  }
+
+  .time-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+
+  .time-label {
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--muted);
+  }
+
+  .time-value {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 42px;
+    letter-spacing: 3px;
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .time-value.done { color: var(--green); }
+
+  .sensitivity-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .sens-label {
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: var(--muted);
+    width: 90px;
+    flex-shrink: 0;
+  }
+
+  input[type=range] {
+    flex: 1;
+    -webkit-appearance: none;
+    height: 2px;
+    background: var(--border);
+    outline: none;
+    border-radius: 2px;
+  }
+
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px; height: 18px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+  }
+
+  .sens-value {
+    font-size: 11px;
+    color: var(--accent);
+    width: 32px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .btn-row {
+    display: flex;
+    gap: 10px;
+  }
+
+  .btn-cam {
+    flex: 1;
+    padding: 16px;
+    background: var(--accent);
+    color: #000;
+    border: none;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 18px;
+    letter-spacing: 3px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.15s;
+  }
+
+  .btn-cam:active { opacity: 0.8; }
+  .btn-cam:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; }
+
+  .btn-small {
+    padding: 16px 18px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 1px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.15s;
+  }
+
+  .btn-small:active { background: var(--border); color: var(--text); }
+
+  /* Setup */
+  #setup-screen {
+    position: fixed; inset: 0; background: var(--bg); z-index: 50;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 32px 24px; gap: 24px;
+  }
+  #setup-screen.hidden { display: none; }
+
+  .setup-logo {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 36px; letter-spacing: 8px; color: var(--accent);
+  }
+  .setup-sub {
+    font-size: 11px; letter-spacing: 2px; color: var(--muted);
+    text-align: center; line-height: 1.8;
+  }
+  .setup-input-group { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+  .setup-label { font-size: 10px; letter-spacing: 2px; color: var(--muted); }
+  .setup-input {
+    width: 100%; padding: 16px;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text); font-family: 'DM Mono', monospace;
+    font-size: 14px; letter-spacing: 1px; border-radius: 4px; outline: none;
+  }
+  .setup-input:focus { border-color: var(--accent); }
+  .btn-primary {
+    width: 100%; padding: 22px; background: var(--accent); color: #000;
+    border: none; font-family: 'Bebas Neue', sans-serif; font-size: 22px;
+    letter-spacing: 4px; cursor: pointer; border-radius: 4px; transition: all 0.15s;
+  }
+  .btn-primary:disabled { background: var(--border); color: var(--muted); }
+
+  /* Finish flash */
+  #finish-flash {
+    position: fixed; inset: 0; background: var(--green); z-index: 200;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Bebas Neue', sans-serif; font-size: 80px;
+    color: #000; letter-spacing: 8px;
+    opacity: 0; pointer-events: none; transition: opacity 0.1s;
+  }
+  #finish-flash.show { opacity: 1; }
+
+  /* State banner */
+  .state-banner {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0,0,0,0.8);
+    padding: 20px 32px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    text-align: center;
+    pointer-events: none;
+  }
+  .state-banner-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 28px;
+    letter-spacing: 4px;
+    color: var(--text);
+  }
+  .state-banner-sub {
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* Zone adjuster */
+  .zone-hint {
+    position: absolute;
+    top: 50%;
+    right: 12px;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    pointer-events: all;
+  }
+
+  .zone-btn {
+    width: 32px; height: 32px;
+    background: rgba(0,0,0,0.7);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="setup-screen">
+  <div class="setup-logo">SPRINT<span style="color:var(--text)">TIMER</span></div>
+  <div class="setup-sub">ZIEL-GERÄT<br>Gleiche Session wie das Startgerät</div>
+
+  <div class="setup-input-group">
+    <div class="setup-label">FIREBASE REALTIME DB URL</div>
+    <input class="setup-input" id="cfg-db-url" type="url" placeholder="https://DEIN-PROJEKT-default-rtdb.firebaseio.com" autocomplete="off">
+  </div>
+
+  <div class="setup-input-group">
+    <div class="setup-label">SESSION-CODE (gleicher wie am Startgerät)</div>
+    <input class="setup-input" id="cfg-session" type="text" placeholder="SPRINT01" value="SPRINT01" style="text-transform:uppercase">
+  </div>
+
+  <button class="btn-primary" id="cfg-btn">VERBINDEN & ZIEL-MODUS</button>
+  <div class="setup-sub" style="font-size:10px">Öffne sprint-start.html auf dem anderen Gerät</div>
+</div>
+
+<div id="finish-flash">ZIEL!</div>
+
+<header>
+  <div class="logo">SPRINT<span style="color:var(--text);font-size:18px"> TIMER</span></div>
+  <div class="role-badge">ZIEL-GERÄT</div>
+</header>
+
+<div class="connection-row">
+  <div class="dot" id="conn-dot"></div>
+  <span id="conn-label">NICHT VERBUNDEN</span>
+  <span style="margin-left:auto;font-size:10px" id="start-status">Start: –</span>
+</div>
+
+<div class="session-id-row">
+  SESSION <span class="session-code" id="session-display">–</span>
+</div>
+
+<div class="camera-section">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+
+  <div class="detection-overlay">
+    <div class="finish-line" id="finish-line">
+      <div class="finish-line-label">ZIELLINIE</div>
+    </div>
+
+    <div class="cam-status">
+      <div class="cam-dot" id="cam-dot"></div>
+      <span id="cam-label">KEIN KAMERA</span>
+    </div>
+
+    <div class="state-banner" id="state-banner">
+      <div class="state-banner-title" id="banner-title">BEREIT</div>
+      <div class="state-banner-sub" id="banner-sub">Warte auf Startgerät...</div>
+    </div>
+
+    <div class="zone-hint">
+      <div class="zone-btn" id="zone-left" title="Linie links">◀</div>
+      <div class="zone-btn" id="zone-right" title="Linie rechts">▶</div>
+    </div>
+
+    <div class="motion-bars" id="motion-bars"></div>
+  </div>
+</div>
+
+<div class="bottom-panel">
+  <div class="time-row">
+    <div>
+      <div class="time-label">ZIELZEIT</div>
+      <div class="time-value" id="time-value">–</div>
+    </div>
+    <div style="text-align:right">
+      <div class="time-label">LÄUFE HEUTE</div>
+      <div style="font-family:'Bebas Neue';font-size:36px;color:var(--muted);letter-spacing:2px" id="run-count">0</div>
+    </div>
+  </div>
+
+  <div class="sensitivity-row">
+    <span class="sens-label">EMPFINDLICHKEIT</span>
+    <input type="range" id="sens-slider" min="5" max="80" value="25">
+    <span class="sens-value" id="sens-val">25</span>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn-cam" id="cam-btn" disabled>KAMERA STARTEN</button>
+    <button class="btn-small" id="manual-btn">MANUELL</button>
+  </div>
+</div>
+
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { getDatabase, ref, set, onValue, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js';
+
+let db, sessionRef, startRef, statusRef, finishRef;
+
+function dbg(msg) {
+  const el = document.getElementById('debug-log');
+  if (!el) return;
+  const line = document.createElement('div');
+  line.textContent = new Date().toLocaleTimeString('de') + ' › ' + msg;
+  el.prepend(line);
+  while (el.children.length > 20) el.removeChild(el.lastChild);
+}
+let videoEl, canvasEl, ctx2d;
+let prevFrameData = null;
+let detectionActive = false;
+let detectionLocked = false; // prevent double-trigger
+let motionHistory = new Array(20).fill(0);
+let runCount = 0;
+let finishLineX = 0.5; // fraction of video width (0.0–1.0)
+
+// ── Init UI references ─────────────────────────────────────────
+videoEl = document.getElementById('video');
+canvasEl = document.getElementById('canvas');
+ctx2d = canvasEl.getContext('2d', { willReadFrequently: true });
+
+// Finish line position control
+let finishLinePct = 50; // percent from left
+function updateFinishLine() {
+  document.getElementById('finish-line').style.left = finishLinePct + '%';
+  finishLineX = finishLinePct / 100;
+}
+
+document.getElementById('zone-left').addEventListener('click', () => {
+  finishLinePct = Math.max(10, finishLinePct - 5);
+  updateFinishLine();
+});
+document.getElementById('zone-right').addEventListener('click', () => {
+  finishLinePct = Math.min(90, finishLinePct + 5);
+  updateFinishLine();
+});
+
+// Sensitivity
+document.getElementById('sens-slider').addEventListener('input', function() {
+  document.getElementById('sens-val').textContent = this.value;
+});
+
+// Motion bars setup
+const motionBarsEl = document.getElementById('motion-bars');
+const BAR_COUNT = 20;
+for (let i = 0; i < BAR_COUNT; i++) {
+  const b = document.createElement('div');
+  b.className = 'motion-bar';
+  motionBarsEl.appendChild(b);
+}
+
+function updateMotionBars(score) {
+  motionHistory.push(score);
+  motionHistory.shift();
+  const bars = motionBarsEl.children;
+  const max = Math.max(...motionHistory, 1);
+  for (let i = 0; i < BAR_COUNT; i++) {
+    const h = (motionHistory[i] / max) * 38;
+    bars[i].style.height = Math.max(2, h) + 'px';
+    bars[i].style.background = motionHistory[i] > parseInt(document.getElementById('sens-slider').value) * 0.8
+      ? 'rgba(255,71,71,0.8)'
+      : 'rgba(232,255,71,0.5)';
+  }
+}
+
+// ── Camera ─────────────────────────────────────────────────────
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+    videoEl.srcObject = stream;
+    videoEl.play();
+
+    dbg('Kamera Stream gestartet...');
+    videoEl.addEventListener('loadedmetadata', () => {
+      canvasEl.width = videoEl.videoWidth;
+      canvasEl.height = videoEl.videoHeight;
+      document.getElementById('cam-dot').className = 'cam-dot live';
+      document.getElementById('cam-label').textContent = 'LIVE';
+      document.getElementById('cam-btn').textContent = 'KAMERA AKTIV';
+      document.getElementById('cam-btn').disabled = true;
+      dbg('Kamera bereit: ' + videoEl.videoWidth + 'x' + videoEl.videoHeight);
+      startMotionLoop();
+      dbg('Motion-Loop gestartet');
+    });
+  } catch(e) {
+    alert('Kamera-Fehler: ' + e.message + '\nBitte Erlaubnis erteilen.');
+  }
+};
+
+// ── Motion detection loop ──────────────────────────────────────
+function startMotionLoop() {
+  const detect = () => {
+    if (videoEl.readyState < 2) { requestAnimationFrame(detect); return; }
+
+    const W = canvasEl.width;
+    const H = canvasEl.height;
+
+    // Sample zone around finish line (25% wide strip)
+    const zoneW = Math.round(W * 0.25);
+    const zoneX = Math.round(W * finishLineX - zoneW / 2);
+    const safeX = Math.max(0, Math.min(W - zoneW, zoneX));
+
+    ctx2d.drawImage(videoEl, 0, 0, W, H);
+    const frameData = ctx2d.getImageData(safeX, 0, zoneW, H);
+    const pixels = frameData.data;
+
+    let motionScore = 0;
+
+    if (prevFrameData) {
+      const prev = prevFrameData.data;
+      const len = pixels.length;
+      let diffSum = 0;
+      const step = 8; // sample every 8th pixel for performance
+
+      for (let i = 0; i < len; i += 4 * step) {
+        const dr = Math.abs(pixels[i]   - prev[i]);
+        const dg = Math.abs(pixels[i+1] - prev[i+1]);
+        const db = Math.abs(pixels[i+2] - prev[i+2]);
+        diffSum += (dr + dg + db) / 3;
+      }
+
+      motionScore = diffSum / (len / (4 * step));
+    }
+
+    prevFrameData = frameData;
+    updateMotionBars(motionScore);
+
+    const sensitivity = parseInt(document.getElementById('sens-slider').value);
+
+    if (detectionActive && !detectionLocked && motionScore > sensitivity) {
+      dbg('Bewegung erkannt! score=' + motionScore.toFixed(1) + ' threshold=' + sensitivity);
+      triggerFinish();
+    }
+
+    requestAnimationFrame(detect);
+  };
+  setInterval(() => dbg('Kamera-Loop aktiv, detectionActive=' + detectionActive + ', locked=' + detectionLocked), 5000);
+  requestAnimationFrame(detect);
+}
+
+// ── Trigger finish ─────────────────────────────────────────────
+function triggerFinish() {
+  dbg('triggerFinish aufgerufen!');
+  if (detectionLocked) { dbg('BLOCKIERT: bereits locked'); return; }
+  detectionLocked = true;
+  detectionActive = false;
+
+  const finishTime = Date.now();
+
+  document.getElementById('finish-line').classList.add('triggered');
+  document.getElementById('cam-dot').className = 'cam-dot detecting';
+
+  // Flash
+  const flash = document.getElementById('finish-flash');
+  flash.classList.add('show');
+  setTimeout(() => flash.classList.remove('show'), 400);
+
+  // Push to Firebase
+  dbg('Sende finishTime=' + finishTime + ' an Firebase...');
+  if (finishRef) {
+    set(finishRef, { finishTime, t: serverTimestamp() }).then(() => dbg('finishTime gesendet ✓')).catch(e => dbg('Firebase FEHLER: ' + e.message));
+  }
+
+  runCount++;
+  document.getElementById('run-count').textContent = runCount;
+
+  setBanner('ZIEL!', '', 'done');
+  document.getElementById('cam-dot').className = 'cam-dot detecting';
+
+  // Beep
+  beep(1200, 0.1);
+  setTimeout(() => beep(900, 0.2), 100);
+
+  setTimeout(() => {
+    document.getElementById('finish-line').classList.remove('triggered');
+    document.getElementById('cam-dot').className = 'cam-dot live';
+  }, 2000);
+}
+
+function manualTrigger() {
+  if (!detectionActive && !detectionLocked) return;
+  triggerFinish();
+};
+
+// ── Audio ──────────────────────────────────────────────────────
+let audioCtx;
+function getAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+function beep(freq, dur) {
+  const ctx = getAudio();
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+  o.connect(g); g.connect(ctx.destination);
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(0.6, ctx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+  o.start(); o.stop(ctx.currentTime + dur);
+}
+
+// ── Banner ─────────────────────────────────────────────────────
+function setBanner(title, sub, state) {
+  document.getElementById('banner-title').textContent = title;
+  document.getElementById('banner-sub').textContent = sub;
+  document.getElementById('state-banner').style.borderColor =
+    state === 'done' ? 'var(--green)' :
+    state === 'go'   ? 'var(--accent2)' :
+    state === 'set'  ? '#ff9900' :
+    'var(--border)';
+}
+
+// ── Firebase init ──────────────────────────────────────────────
+async function initApp() {
+  const dbUrl = document.getElementById('cfg-db-url').value.trim();
+  const session = document.getElementById('cfg-session').value.trim().toUpperCase() || 'SPRINT01';
+
+  if (!dbUrl) { alert('Bitte Firebase DB URL eingeben!'); return; }
+
+  // Automatisch bereinigen: nur Protokoll + Host, kein Pfad
+  let cleanUrl = dbUrl;
+  try {
+    const u = new URL(dbUrl);
+    cleanUrl = u.protocol + '//' + u.host;
+  } catch(e) { /* url bleibt wie sie ist */ }
+  document.getElementById('cfg-db-url').value = cleanUrl;
+
+  document.getElementById('cfg-btn').disabled = true;
+  document.getElementById('cfg-btn').textContent = 'VERBINDE...';
+
+  try {
+    const app = initializeApp({ databaseURL: cleanUrl }, 'sprint-finish');
+    db = getDatabase(app);
+
+    sessionRef = ref(db, `sessions/${session}`);
+    startRef   = ref(db, `sessions/${session}/start`);
+    statusRef  = ref(db, `sessions/${session}/status`);
+    finishRef  = ref(db, `sessions/${session}/finish`);
+
+    document.getElementById('session-display').textContent = session;
+
+    // Presence ping
+    const presRef = ref(db, `sessions/${session}/finish_presence`);
+    set(presRef, { t: Date.now() });
+    setInterval(() => set(presRef, { t: Date.now() }), 3000);
+
+    // Watch start device presence
+    onValue(ref(db, `sessions/${session}/start_presence`), snap => {
+      const v = snap.val();
+      const alive = v && v.t && (Date.now() - v.t < 30000);
+      document.getElementById('start-status').textContent = alive ? '✅ Verbunden' : (v ? '⚠ Signal schwach' : '⚠ Nicht da');
+    });
+
+    // Watch status from start device
+    onValue(statusRef, snap => {
+      const v = snap.val();
+      if (!v) return;
+
+      switch(v.state) {
+        case 'sequence_start':
+          dbg('Firebase: sequence_start empfangen');
+          detectionActive = false;
+          detectionLocked = false;
+          document.getElementById('time-value').textContent = '–';
+          document.getElementById('time-value').className = 'time-value';
+          setBanner('AUF DIE PLÄTZE', 'Startsequenz läuft...', 'ready');
+          break;
+        case 'set':
+          dbg('Firebase: set empfangen');
+          setBanner('FERTIG', 'Warte auf Startschuss...', 'set');
+          break;
+        case 'running':
+          dbg('Firebase: running empfangen → Detektion AN');
+          detectionActive = true;
+          detectionLocked = false;
+          setBanner('LOS!', 'Bewegungserkennung aktiv', 'go');
+          document.getElementById('cam-dot').className = 'cam-dot live';
+          break;
+        case 'idle':
+          dbg('Firebase: idle empfangen');
+          detectionActive = false;
+          detectionLocked = false;
+          setBanner('BEREIT', 'Warte auf Startgerät...', '');
+          break;
+      }
+    });
+
+    // Watch for finish time confirmation back from start (to display time here too)
+    onValue(ref(db, `sessions/${session}/history`), snap => {
+      const items = [];
+      snap.forEach(c => items.push(c.val()));
+      if (items.length > 0) {
+        const last = items[items.length - 1];
+        document.getElementById('time-value').textContent = last.timeStr;
+        document.getElementById('time-value').className = 'time-value done';
+      }
+    });
+
+    document.getElementById('conn-dot').className = 'dot online';
+    document.getElementById('conn-label').textContent = `VERBUNDEN · SESSION ${session}`;
+    document.getElementById('setup-screen').classList.add('hidden');
+    document.getElementById('cam-btn').disabled = false;
+    setBanner('BEREIT', 'Kamera starten & warten', '');
+    dbg('Firebase verbunden ✓ - Warte auf Status-Updates');
+
+  } catch(e) {
+    alert('Firebase Fehler: ' + e.message);
+    document.getElementById('cfg-btn').disabled = false;
+    document.getElementById('cfg-btn').textContent = 'VERBINDEN & ZIEL-MODUS';
+  }
+}
+
+// ── Button event listeners ─────────────────────────────────────
+document.getElementById('cfg-btn').addEventListener('click', initApp);
+document.getElementById('cam-btn').addEventListener('click', startCamera);
+document.getElementById('manual-btn').addEventListener('click', manualTrigger);
+</script>
+<div id="debug-panel" style="position:fixed;bottom:0;left:0;right:0;padding:8px 12px;background:rgba(0,0,0,0.92);border-top:1px solid #333;font-size:10px;font-family:monospace;color:#47ff8a;max-height:100px;overflow-y:auto;z-index:500">
+  <div style="color:#555;margin-bottom:2px">DEBUG:</div>
+  <div id="debug-log">Warte...</div>
+</div>
+</body>
+</html>
