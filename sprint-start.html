@@ -624,7 +624,11 @@ function playStartgun() {
 function setState(state, sub='') {
   const label = document.getElementById('state-label');
   const sublabel = document.getElementById('sub-label');
-  label.className = 'state-label ' + state;
+  // Visual CSS classes: ready, set, go, done
+  const visualStates = ['ready', 'set', 'go', 'done'];
+  label.className = 'state-label ' + (visualStates.includes(state) ? state : '');
+  const labels = { idle: 'BEREIT', ready: 'AUF DIE PLÄTZE', set: 'FERTIG', go: 'LOS!', done: 'GESCHAFFT' };
+  label.textContent = labels[state] || 'BEREIT';
   sublabel.textContent = sub;
   currentState = state;
 }
@@ -664,7 +668,11 @@ function animateCountdown(totalMs, remainingMs) {
 
 // ── Main sequence ──────────────────────────────────────────────
 async function startSequence() {
-  if (currentState !== 'idle') return;
+  // Allow start from idle OR done state
+  if (currentState !== 'idle' && currentState !== 'done') {
+    console.log('startSequence blocked, currentState=', currentState);
+    return;
+  }
   getAudio(); // unlock audio on user gesture
 
   const minDelay = parseFloat(document.getElementById('delay-min').value) * 1000;
@@ -840,6 +848,13 @@ async function initApp() {
     setConn(true, 'VERBUNDEN');
     document.getElementById('setup-screen').classList.add('hidden');
     document.getElementById('start-btn').disabled = false;
+    document.getElementById('reset-btn').disabled = true;
+    currentState = 'idle';
+    setState('idle', 'Drücke START um die Sequenz zu beginnen');
+
+    // Alten Finish-Status löschen damit kein veralteter Wert sofort triggert
+    set(ref(db, `sessions/${session}/finish`), null);
+    set(statusRef, { state: 'idle', t: Date.now() });
 
   } catch(e) {
     alert('Firebase Fehler: ' + e.message);
