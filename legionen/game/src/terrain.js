@@ -1,0 +1,565 @@
+// Kartengenerierung: Höhenfeld, Szenario-Strukturen, Navigationsgitter
+import { mulberry32, makeNoise, clamp, smooth, lerp } from './rng.js';
+
+export const PLAY_W = 150; // spielbare Fläche x ∈ [-75, 75]
+export const PLAY_D = 100; // z ∈ [-50, 50]
+const EXT_X = 112, EXT_Z = 80; // gerenderte Fläche (mit Randgebirge)
+const STEP = 1.5;
+export const CELL = 2;
+
+export const G_GRASS = 0, G_DIRT = 1, G_SAND = 2, G_ROCK = 3, G_BED = 4, G_SNOWCAP = 5, G_FLOOR = 6;
+
+export class BattleMap {
+  constructor(scenario, biome, seed) {
+    this.scenario = scenario;
+    this.biome = biome;
+    this.seed = seed;
+    this.rng = mulberry32(seed);
+    this.noise = makeNoise(seed);
+    this.nx = Math.round((EXT_X * 2) / STEP) + 1;
+    this.nz = Math.round((EXT_Z * 2) / STEP) + 1;
+    this.heights = new Float32Array(this.nx * this.nz);
+    this.ground = new Uint8Array(this.nx * this.nz);
+    this.gw = PLAY_W / CELL;
+    this.gd = PLAY_D / CELL;
+    const n = this.gw * this.gd;
+    this.blocked = new Uint8Array(n);
+    this.cost = new Float32Array(n).fill(1);
+    this.flags = new Uint8Array(n); // 1 forest, 2 ford, 4 bridge, 8 gate, 16 castle-innen, 32 road
+    this.clear = new Uint8Array(n);
+    this.waterLevel = -0.55;
+    this.hasWater = false;
+    this.structures = [];
+    this.decor = { trees: [], rocks: [], tufts: [], flowers: [], tents: [], menhirs: [], bushes: [], fences: [], ruins: [], torches: [] };
+    this.forests = [];
+    this.roads = [];
+    this.bridges = [];
+    this.castle = null;
+    this.gate = null;
+    this.objective = null;
+    this.zones = [null, null];
+    this.camps = [null, null];
+    this.fogDensity = scenario === 'forest' ? 0.011 : 0.0045;
+    this.generate();
+  }
+
+  // ---------- Höhenfunktion ----------
+  generate() {
+    const r = this.rng, N = this.noise;
+    const sc = this.scenario;
+    this.phase = r.range(0, Math.PI * 2);
+    this.roadZ = r.range(-12, 12);
+
+    // Szenario-Parameter
+    if (sc === 'assault' || sc === 'defend') {
+      const side = sc === 'assault' ? 1 : -1; // Burg im Osten (Bot) oder Westen (Spieler)
+      this.castle = { cx: 48 * side, cz: r.range(-6, 6), half: 19, owner: sc === 'assault' ? 1 : 0, face: -side, base: 1.6 };
+    }
+    if (sc === 'river') {
+      this.hasWater = true;
+      this.river = { amp: r.range(5, 9), freq: r.range(0.035, 0.06), ph: this.phase, half: 5.2 };
+      const bz = r.range(-22, 22);
+      this.bridgeZ = bz;
+      const fords = [];
+      const f1 = bz > 0 ? r.range(-40, -18) : r.range(18, 40);
+      fords.push(f1);
+      if (r.chance(0.6)) {
+        let f2 = r.range(-40, 40);
+        if (Math.abs(f2 - bz) > 16 && Math.abs(f2 - f1) > 16) fords.push(f2);
+      }
+      this.fords = fords;
+    }
+    if (sc === 'canyon') {
+      this.canyon = { amp: r.range(8, 13), ph: this.phase, pinch: r.range(-15, 15), top: 12 };
+      this.biomeTint = true;
+    }
+    if (sc === 'hill') {
+      this.objective = { type: 'hill', x: r.range(-5, 5), z: r.range(-5, 5), r: 9, score: [0, 0], need: 100 };
+    }
+    if (sc === 'castle' || this.castle) {
+      this.hasWater = true; // Burggraben
+    }
+
+    const hAt = (x, z) => this.heightFn(x, z);
+    for (let j = 0; j < this.nz; j++) {
+      for (let i = 0; i < this.nx; i++) {
+        const x = -EXT_X + i * STEP, z = -EXT_Z + j * STEP;
+        const k = j * this.nx + i;
+        const [h, g] = hAt(x, z);
+        this.heights[k] = h;
+        this.ground[k] = g;
+      }
+    }
+    this.placeStructures();
+    this.buildNav();
+    this.placeDecor();
+  }
+
+  canyonCenter(x) {
+    const c = this.canyon;
+    return Math.sin(x * 0.035 + c.ph) * c.amp + Math.sin(x * 0.09 + c.ph * 2) * 2.5;
+  }
+  canyonHalf(x) {
+    const c = this.canyon;
+    return 15 - 6 * Math.exp(-(((x - c.pinch) / 16) ** 2)) + this.noise(x * 0.08, 3.3) * 2.5;
+  }
+  riverX(z) {
+    const rv = this.river;
+    return Math.sin(z * rv.freq + rv.ph) * rv.amp + this.noise(z * 0.05, 9.1) * 3;
+  }
+
+  heightFn(x, z) {
+    const N = this.noise;
+    let h = N.fbm(x * 0.022, z * 0.022, 4) * 3.2 + N(x * 0.09, z * 0.09) * 0.35;
+    let g = G_GRASS;
+
+    // Randgebirge außerhalb der Spielfläche
+    const ex = Math.max(0, Math.abs(x) - 74), ez = Math.max(0, Math.abs(z) - 49);
+    const edge = Math.sqrt(ex * ex + ez * ez);
+    let mountain = 0;
+    if (edge > 0) {
+      mountain = Math.pow(edge / 12, 1.4) * (6 + 10 * (0.5 + 0.5 * N(x * 0.05, z * 0.05)));
+    }
+
+    const sc = this.scenario;
+    if (sc === 'canyon') {
+      const cz = this.canyonCenter(x), hw = this.canyonHalf(x);
+      const d = Math.abs(z - cz);
+      const t = smooth(hw, hw + 3.5, d);
+      // Terrassen für Lowpoly-Felswände
+      const top = this.canyon.top + N.fbm(x * 0.03, z * 0.03, 3) * 4;
+      const floor = N.fbm(x * 0.04, z * 0.04, 3) * 1.2;
+      const terr = Math.floor(t * 4) / 4 * 0.35 + t * 0.65;
+      h = lerp(floor, top, terr);
+      g = t > 0.12 ? (t > 0.95 ? G_GRASS : G_ROCK) : G_FLOOR;
+      if (d < 3 && Math.abs(x) < 70) g = G_DIRT; // trockenes Flussbett / Pfad
+      mountain *= 0.5;
+    } else if (sc === 'river') {
+      const rx = this.riverX(z);
+      const d = Math.abs(x - rx);
+      const half = this.river.half + N(z * 0.1, 1.7) * 1.0;
+      let depth = 1 - smooth(half - 1.5, half + 2.5, d);
+      let bed = -2.2;
+      for (const fz of this.fords) {
+        const fd = Math.abs(z - fz);
+        if (fd < 5) bed = lerp(-0.2, bed, smooth(2.5, 5, fd));
+      }
+      h = lerp(h * 0.6, bed, depth);
+      if (depth > 0.25) g = G_BED;
+      else if (depth > 0.02) g = G_SAND;
+    } else if (sc === 'hill') {
+      const o = this.objective;
+      const d = Math.hypot(x - o.x, z - o.z);
+      const hill = 7.5 * Math.exp(-((d / 21) ** 2));
+      h = h * 0.8 + hill;
+      if (d < 11) {
+        h = lerp(h, 7.5 + N(x * 0.1, z * 0.1) * 0.2, smooth(11, 8, d));
+        if (d < 10) g = G_DIRT;
+      }
+    } else if (sc === 'forest') {
+      h = h * 1.2;
+    }
+
+    if (this.castle) {
+      const c = this.castle;
+      const dx = Math.abs(x - c.cx), dz = Math.abs(z - c.cz);
+      const box = Math.max(dx, dz);
+      // Plateau
+      const plat = smooth(c.half + 12, c.half + 5, box);
+      h = lerp(h, c.base, plat);
+      // Burggraben
+      const moatIn = c.half + 3, moatOut = c.half + 7.5;
+      if (box > moatIn - 1 && box < moatOut + 1) {
+        const m = smooth(moatIn - 1, moatIn + 1, box) * (1 - smooth(moatOut - 1, moatOut + 1, box));
+        h = lerp(h, -2.0, m);
+        if (m > 0.3) g = G_BED;
+        else if (m > 0.02) g = G_SAND;
+      }
+      if (box < c.half + 1) g = G_DIRT;
+    }
+
+    // Straße vom eigenen Lager Richtung Mitte (optisch)
+    if (sc !== 'canyon' && Math.abs(x) < 74) {
+      const rz = this.roadZ + Math.sin(x * 0.05 + this.phase) * 6;
+      if (Math.abs(z - rz) < 1.6 && g === G_GRASS) g = G_DIRT;
+    }
+
+    h += mountain;
+    if (edge > 6 && h > 14 && this.biome !== 'desert') g = G_SNOWCAP;
+    else if (edge > 3) g = mountain > 3 ? G_ROCK : g;
+    return [h, g];
+  }
+
+  // ---------- Höhenabfrage (exakt auf den Dreiecken) ----------
+  terrainHeight(x, z) {
+    const fx = (x + EXT_X) / STEP, fz = (z + EXT_Z) / STEP;
+    let i = Math.floor(fx), j = Math.floor(fz);
+    i = clamp(i, 0, this.nx - 2); j = clamp(j, 0, this.nz - 2);
+    const u = clamp(fx - i, 0, 1), v = clamp(fz - j, 0, 1);
+    const H = this.heights, nx = this.nx;
+    const h00 = H[j * nx + i], h10 = H[j * nx + i + 1], h01 = H[(j + 1) * nx + i], h11 = H[(j + 1) * nx + i + 1];
+    if (u + v <= 1) return h00 + (h10 - h00) * u + (h01 - h00) * v;
+    return h11 + (h01 - h11) * (1 - u) + (h10 - h11) * (1 - v);
+  }
+  getHeight(x, z) {
+    let h = this.terrainHeight(x, z);
+    for (const b of this.bridges) {
+      const lx = (x - b.x) * b.cos + (z - b.z) * b.sin;
+      const lz = -(x - b.x) * b.sin + (z - b.z) * b.cos;
+      if (Math.abs(lx) < b.len / 2 && Math.abs(lz) < b.width / 2) {
+        const t = 1 - (lx / (b.len / 2)) ** 2;
+        h = Math.max(h, b.y + t * b.arch);
+      }
+    }
+    if (this.hasWater && h < this.waterLevel - 0.35) h = Math.max(h, this.waterLevel - 0.35);
+    return h;
+  }
+
+  // ---------- Strukturen ----------
+  placeStructures() {
+    const r = this.rng;
+    const c = this.castle;
+    if (c) {
+      const H = 6.2, T = 2.2, hf = c.half;
+      const face = c.face; // -1: Tor zeigt nach Westen, +1: nach Osten
+      const gateX = c.cx + face * hf;
+      c.gateX = gateX;
+      // Mauern (Tor-Lücke in der Frontmauer)
+      const gw = 3.4;
+      const addWall = (x, z, w, d) => this.structures.push({ kind: 'wall', x, z, w, d, h: H });
+      addWall(c.cx - face * hf, c.cz, T, hf * 2); // Rückmauer
+      addWall(c.cx, c.cz - hf, hf * 2, T);
+      addWall(c.cx, c.cz + hf, hf * 2, T);
+      const segLen = hf - gw;
+      addWall(gateX, c.cz - gw - segLen / 2, T, segLen);
+      addWall(gateX, c.cz + gw + segLen / 2, T, segLen);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        this.structures.push({ kind: 'tower', x: c.cx + sx * hf, z: c.cz + sz * hf, r: 3.2, h: 9.5 });
+      }
+      this.structures.push({ kind: 'tower', x: gateX, z: c.cz - gw - 1.4, r: 2.4, h: 8.4, small: true });
+      this.structures.push({ kind: 'tower', x: gateX, z: c.cz + gw + 1.4, r: 2.4, h: 8.4, small: true });
+      this.gate = { x: gateX, z: c.cz, w: gw * 2, owner: c.owner, hp: 520, maxHp: 520, face, alive: true, shake: 0 };
+      this.structures.push({ kind: 'gate', ref: this.gate, x: gateX, z: c.cz, w: gw * 2, h: 5.4 });
+      // Bergfried
+      const kx = c.cx - face * (hf - 8);
+      this.structures.push({ kind: 'keep', x: kx, z: c.cz, w: 9, d: 9, h: 13 });
+      // Häuschen im Hof
+      this.structures.push({ kind: 'house', x: c.cx - face * (hf - 4), z: c.cz - hf + 5, rot: 0 });
+      this.structures.push({ kind: 'house', x: c.cx - face * (hf - 4), z: c.cz + hf - 5, rot: Math.PI });
+      this.structures.push({ kind: 'well', x: c.cx + face * 2, z: c.cz + 8 });
+      // Zugbrücke über den Graben
+      this.bridges.push({ x: gateX + face * 5.5, z: c.cz, len: 12, width: 6.4, y: c.base + 0.15, arch: 0.2, cos: 1, sin: 0, wood: true });
+      this.objective = { type: 'keep', x: kx + face * 9.5, z: c.cz, r: 8, hold: 0, need: 20, owner: c.owner };
+      for (const sz of [-1, 1]) this.decor.torches.push({ x: gateX + face * 1.6, z: c.cz + sz * (gw + 0.2), y: c.base + 3.5 });
+    }
+    if (this.scenario === 'river') {
+      const bz = this.bridgeZ;
+      const bx = this.riverX(bz);
+      // Brücke quer zum Fluss (in x-Richtung, leicht gedreht nach Flussneigung)
+      const dxdz = (this.riverX(bz + 1) - this.riverX(bz - 1)) / 2;
+      const ang = Math.atan(dxdz) * -1;
+      this.bridges.push({ x: bx, z: bz, len: 22, width: 5.6, y: 0.1, arch: 1.4, cos: Math.cos(ang), sin: Math.sin(ang), wood: false });
+    }
+    if (this.scenario === 'hill') {
+      const o = this.objective;
+      const n = 9;
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + 0.3;
+        this.decor.menhirs.push({ x: o.x + Math.cos(a) * 8.6, z: o.z + Math.sin(a) * 8.6, h: r.range(2.4, 3.6), rot: a, fallen: r.chance(0.15) });
+      }
+      this.decor.menhirs.push({ x: o.x, z: o.z, h: 1.2, rot: 0, altar: true });
+    }
+    if (this.scenario === 'canyon') {
+      // Ruinen eines Wachturms im Pass
+      const x = this.canyon.pinch + r.range(-6, 6);
+      const cz = this.canyonCenter(x);
+      this.decor.ruins.push({ x, z: cz + (r.chance(0.5) ? -1 : 1) * (this.canyonHalf(x) - 4), r: 2.6 });
+    }
+
+    // Deploy-Zonen
+    const zoneW = 24, zoneD = 60;
+    const west = { x0: -73, x1: -73 + zoneW, z0: -zoneD / 2, z1: zoneD / 2 };
+    const east = { x0: 73 - zoneW, x1: 73, z0: -zoneD / 2, z1: zoneD / 2 };
+    this.zones = [west, east];
+    if (c) {
+      const inner = c.half - 2.2;
+      const zone = { x0: c.cx - inner, x1: c.cx + inner, z0: c.cz - inner, z1: c.cz + inner, castle: true };
+      this.zones[c.owner] = zone;
+      const att = 1 - c.owner;
+      this.zones[att] = att === 0 ? { x0: -73, x1: -45, z0: -32, z1: 32 } : { x0: 45, x1: 73, z0: -32, z1: 32 };
+    }
+    if (this.scenario === 'canyon') {
+      this.zones = [{ x0: -73, x1: -52, z0: -40, z1: 40 }, { x0: 52, x1: 73, z0: -40, z1: 40 }];
+    }
+    // Lager hinter den Zonen
+    for (let s = 0; s < 2; s++) {
+      const z = this.zones[s];
+      const cx = s === 0 ? -71 : 71;
+      let cz = (z.z0 + z.z1) / 2;
+      if (this.scenario === 'canyon') cz = this.canyonCenter(cx);
+      this.camps[s] = { x: cx, z: cz };
+      if (!(c && c.owner === s)) {
+        for (let t = 0; t < 4; t++) {
+          const tx = cx - (s === 0 ? -1 : 1) * r.range(-1, 2) + (s === 0 ? -1 : 1) * 1.5;
+          const tz = cz + (t - 1.5) * 6 + r.range(-1, 1);
+          this.decor.tents.push({ x: s === 0 ? -76 - r.range(0, 3) : 76 + r.range(0, 3), z: tz, side: s, rot: r.range(-0.4, 0.4) + (s === 0 ? Math.PI / 2 : -Math.PI / 2), big: t === 1 });
+        }
+      }
+    }
+  }
+
+  // ---------- Navigation ----------
+  cellIndex(x, z) {
+    const i = Math.floor((x + PLAY_W / 2) / CELL), j = Math.floor((z + PLAY_D / 2) / CELL);
+    if (i < 0 || j < 0 || i >= this.gw || j >= this.gd) return -1;
+    return j * this.gw + i;
+  }
+  cellCenter(k) {
+    const i = k % this.gw, j = (k / this.gw) | 0;
+    return [-PLAY_W / 2 + (i + 0.5) * CELL, -PLAY_D / 2 + (j + 0.5) * CELL];
+  }
+
+  buildNav() {
+    const gw = this.gw, gd = this.gd;
+    for (let j = 0; j < gd; j++) {
+      for (let i = 0; i < gw; i++) {
+        const k = j * gw + i;
+        const x0 = -PLAY_W / 2 + i * CELL, z0 = -PLAY_D / 2 + j * CELL;
+        let lo = 1e9, hi = -1e9, sum = 0, cnt = 0;
+        for (let a = 0; a <= 2; a++) for (let b = 0; b <= 2; b++) {
+          const h = this.terrainHeight(x0 + a, z0 + b);
+          lo = Math.min(lo, h); hi = Math.max(hi, h); sum += h; cnt++;
+        }
+        const avg = sum / cnt;
+        if (i === 0 || j === 0 || i === gw - 1 || j === gd - 1) this.blocked[k] = 1;
+        if (hi - lo > 2.6) this.blocked[k] = 1;
+        if (this.scenario === 'canyon' && avg > 5) this.blocked[k] = 1;
+        if (this.hasWater && avg < this.waterLevel - 0.9) this.blocked[k] = 1;
+        if (this.hasWater && avg < this.waterLevel + 0.1 && avg >= this.waterLevel - 0.9) {
+          this.flags[k] |= 2; this.cost[k] += 1.6;
+        }
+      }
+    }
+    // Brücken
+    for (const b of this.bridges) {
+      for (let k = 0; k < gw * gd; k++) {
+        const [x, z] = this.cellCenter(k);
+        const lx = (x - b.x) * b.cos + (z - b.z) * b.sin;
+        const lz = -(x - b.x) * b.sin + (z - b.z) * b.cos;
+        if (Math.abs(lx) < b.len / 2 + 0.5 && Math.abs(lz) < b.width / 2 - 0.3) {
+          this.blocked[k] = 0; this.flags[k] = (this.flags[k] & ~2) | 4; this.cost[k] = 1;
+        }
+      }
+    }
+    // Strukturen blockieren
+    for (const s of this.structures) {
+      if (s.kind === 'wall' || s.kind === 'keep' || s.kind === 'house') {
+        const w = (s.w || 5) / 2 + 0.9, d = (s.d || 4) / 2 + 0.9;
+        this.markRect(s.x - w, s.z - d, s.x + w, s.z + d, (k) => { this.blocked[k] = 1; });
+      } else if (s.kind === 'tower' || s.kind === 'well') {
+        const rr = (s.r || 1.2) + 0.8;
+        this.markRect(s.x - rr, s.z - rr, s.x + rr, s.z + rr, (k) => {
+          const [x, z] = this.cellCenter(k);
+          if (Math.hypot(x - s.x, z - s.z) < rr + 0.6) this.blocked[k] = 1;
+        });
+      }
+    }
+    const c = this.castle;
+    if (c) {
+      const inner = c.half - 1.2;
+      this.markRect(c.cx - inner, c.cz - inner, c.cx + inner, c.cz + inner, (k) => { this.flags[k] |= 16; });
+      const g = this.gate;
+      g.cells = [];
+      this.markRect(g.x - 1.6, g.z - g.w / 2 + 0.4, g.x + 1.6, g.z + g.w / 2 - 0.4, (k) => {
+        this.blocked[k] = 0; this.flags[k] |= 8; g.cells.push(k);
+      });
+    }
+    for (const m of this.decor.menhirs) {
+      if (m.altar) continue;
+      const k = this.cellIndex(m.x, m.z);
+      if (k >= 0) this.blocked[k] = 1;
+    }
+    for (const ru of this.decor.ruins) {
+      this.markRect(ru.x - ru.r, ru.z - ru.r, ru.x + ru.r, ru.z + ru.r, (k) => { this.blocked[k] = 1; });
+    }
+    // Wälder (Szenario Nebelwald + ein paar Haine)
+    this.makeForests();
+    for (const f of this.forests) {
+      this.markRect(f.x - f.r, f.z - f.r, f.x + f.r, f.z + f.r, (k) => {
+        const [x, z] = this.cellCenter(k);
+        if (Math.hypot((x - f.x) / f.r, (z - f.z) / f.r * f.rx) < 1 && !this.blocked[k]) {
+          this.flags[k] |= 1; this.cost[k] += 0.6;
+        }
+      });
+    }
+    // Felsblöcke im Canyon
+    if (this.scenario === 'canyon') {
+      const r = this.rng;
+      for (let n = 0; n < 7; n++) {
+        const x = r.range(-44, 44);
+        const cz = this.canyonCenter(x);
+        const z = cz + r.range(-1, 1) * (this.canyonHalf(x) - 5);
+        const rr = r.range(1.4, 2.6);
+        this.decor.rocks.push({ x, z, s: rr * 1.35, big: true, rot: r() * 6 });
+        this.markRect(x - rr, z - rr, x + rr, z + rr, (k) => {
+          const [cx, cz2] = this.cellCenter(k);
+          if (Math.hypot(cx - x, cz2 - z) < rr + 0.4) this.blocked[k] = 1;
+        });
+      }
+    }
+    this.computeClearance();
+  }
+
+  makeForests() {
+    const r = this.rng;
+    const count = this.scenario === 'forest' ? r.int(11, 14) : this.scenario === 'canyon' ? 0 : r.int(2, 4);
+    let tries = 0;
+    while (this.forests.length < count && tries++ < 300) {
+      const x = r.range(-44, 44), z = r.range(-44, 44);
+      const rad = this.scenario === 'forest' ? r.range(6, 11) : r.range(5, 8);
+      if (this.nearStructure(x, z, rad + 4)) continue;
+      if (this.objective && Math.hypot(x - this.objective.x, z - this.objective.z) < rad + 12) continue;
+      if (this.scenario === 'river' && Math.abs(x - this.riverX(z)) < rad + 7) continue;
+      if (this.forests.some((f) => Math.hypot(f.x - x, f.z - z) < f.r + rad + 3)) continue;
+      const k = this.cellIndex(x, z);
+      if (k < 0 || this.blocked[k]) continue;
+      this.forests.push({ x, z, r: rad, rx: r.range(0.8, 1.25) });
+    }
+  }
+
+  nearStructure(x, z, d) {
+    if (this.castle && Math.max(Math.abs(x - this.castle.cx), Math.abs(z - this.castle.cz)) < this.castle.half + 9 + d * 0.3) return true;
+    for (const b of this.bridges) if (Math.hypot(x - b.x, z - b.z) < d + b.len / 2) return true;
+    if (this.scenario === 'river' && this.fords.some((fz) => Math.abs(z - fz) < d && Math.abs(x - this.riverX(fz)) < d + 6)) return true;
+    return false;
+  }
+
+  markRect(x0, z0, x1, z1, fn) {
+    const i0 = Math.max(0, Math.floor((x0 + PLAY_W / 2) / CELL)), i1 = Math.min(this.gw - 1, Math.floor((x1 + PLAY_W / 2) / CELL));
+    const j0 = Math.max(0, Math.floor((z0 + PLAY_D / 2) / CELL)), j1 = Math.min(this.gd - 1, Math.floor((z1 + PLAY_D / 2) / CELL));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) fn(j * this.gw + i);
+  }
+
+  computeClearance() {
+    const gw = this.gw, gd = this.gd, n = gw * gd;
+    const dist = this.clear;
+    dist.fill(255);
+    const q = new Int32Array(n);
+    let head = 0, tail = 0;
+    for (let k = 0; k < n; k++) if (this.blocked[k]) { dist[k] = 0; q[tail++] = k; }
+    while (head < tail) {
+      const k = q[head++];
+      const i = k % gw, j = (k / gw) | 0;
+      for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+        const a = i + di, b = j + dj;
+        if (a < 0 || b < 0 || a >= gw || b >= gd) continue;
+        const kk = b * gw + a;
+        if (dist[kk] > dist[k] + 1) { dist[kk] = dist[k] + 1; q[tail++] = kk; }
+      }
+    }
+  }
+
+  // Freiraum (Welt-Einheiten) an Position
+  clearanceAt(x, z) {
+    const k = this.cellIndex(x, z);
+    if (k < 0) return 0;
+    return this.clear[k] * CELL - 1;
+  }
+  isPassable(x, z, side = -1) {
+    const k = this.cellIndex(x, z);
+    if (k < 0 || this.blocked[k]) return false;
+    if ((this.flags[k] & 8) && this.gate && this.gate.alive && side !== this.gate.owner) return false;
+    return true;
+  }
+  flagAt(x, z) {
+    const k = this.cellIndex(x, z);
+    return k < 0 ? 0 : this.flags[k];
+  }
+  inCastle(x, z) {
+    const c = this.castle;
+    return !!c && Math.abs(x - c.cx) < c.half - 0.8 && Math.abs(z - c.cz) < c.half - 0.8;
+  }
+
+  // ---------- Dekoration ----------
+  placeDecor() {
+    const r = this.rng;
+    const D = this.decor;
+    const biome = this.biome;
+    const inZone = (x, z, pad) => this.zones.some((zn) => x > zn.x0 - pad && x < zn.x1 + pad && z > zn.z0 - pad && z < zn.z1 + pad);
+    // Bäume in Wäldern
+    for (const f of this.forests) {
+      const n = Math.round(f.r * f.r * 0.22);
+      for (let t = 0; t < n; t++) {
+        const a = r() * Math.PI * 2, d = Math.sqrt(r()) * f.r;
+        const x = f.x + Math.cos(a) * d, z = f.z + Math.sin(a) * d / f.rx;
+        const k = this.cellIndex(x, z);
+        if (k < 0 || this.blocked[k]) continue;
+        D.trees.push({ x, z, s: r.range(0.8, 1.35), kind: this.treeKind(), rot: r() * 6 });
+      }
+      for (let t = 0; t < n * 0.4; t++) {
+        const a = r() * Math.PI * 2, d = Math.sqrt(r()) * (f.r + 2);
+        D.bushes.push({ x: f.x + Math.cos(a) * d, z: f.z + Math.sin(a) * d, s: r.range(0.5, 1) });
+      }
+    }
+    // Einzelne Bäume & Felsen verteilt
+    for (let t = 0; t < 70; t++) {
+      const x = r.range(-74, 74), z = r.range(-49, 49);
+      const k = this.cellIndex(x, z);
+      if (k < 0 || this.blocked[k] || this.flags[k] & (2 | 4 | 8 | 16)) continue;
+      if (inZone(x, z, 3) || this.nearStructure(x, z, 3)) continue;
+      if (this.objective && Math.hypot(x - this.objective.x, z - this.objective.z) < 12) continue;
+      if (this.scenario === 'canyon' && this.terrainHeight(x, z) > 3) continue;
+      if (r.chance(0.55)) D.trees.push({ x, z, s: r.range(0.8, 1.3), kind: this.treeKind(), rot: r() * 6 });
+      else D.rocks.push({ x, z, s: r.range(0.5, 1.1), rot: r() * 6 });
+    }
+    // Bäume/Felsen im Außenbereich (Rahmen)
+    for (let t = 0; t < 420; t++) {
+      const x = r.range(-EXT_X + 4, EXT_X - 4), z = r.range(-EXT_Z + 4, EXT_Z - 4);
+      if (Math.abs(x) < 77 && Math.abs(z) < 52) continue;
+      const h = this.terrainHeight(x, z);
+      if (h > 20) continue;
+      if (r.chance(0.72)) D.trees.push({ x, z, s: r.range(0.9, 1.6), kind: this.treeKind(true), rot: r() * 6 });
+      else D.rocks.push({ x, z, s: r.range(0.8, 2.2), rot: r() * 6 });
+    }
+    // Canyon-Hochebenen: Felsen und dürre Bäume
+    if (this.scenario === 'canyon') {
+      for (let t = 0; t < 90; t++) {
+        const x = r.range(-74, 74), z = r.range(-49, 49);
+        if (this.terrainHeight(x, z) < 10) continue;
+        if (r.chance(0.5)) D.trees.push({ x, z, s: r.range(0.8, 1.2), kind: this.treeKind(true), rot: r() * 6 });
+        else D.rocks.push({ x, z, s: r.range(0.6, 1.8), rot: r() * 6 });
+      }
+    }
+    // Grasbüschel & Blumen
+    const tuftN = biome === 'desert' ? 120 : 260;
+    for (let t = 0; t < tuftN; t++) {
+      const x = r.range(-80, 80), z = r.range(-54, 54);
+      const k = this.cellIndex(x, z);
+      if (k >= 0 && (this.blocked[k] || this.flags[k] & (2 | 4 | 16))) continue;
+      if (this.terrainHeight(x, z) < this.waterLevel + 0.2 && this.hasWater) continue;
+      if (r.chance(0.2)) D.flowers.push({ x, z, c: r.int(0, 3) });
+      else D.tufts.push({ x, z, s: r.range(0.6, 1.2), rot: r() * 6 });
+    }
+    // Zäune an Straßen
+    if (this.scenario !== 'canyon') {
+      for (let n = 0; n < 3; n++) {
+        const x = r.range(-40, 40);
+        const z = this.roadZ + Math.sin(x * 0.05 + this.phase) * 6 + (r.chance(0.5) ? 3 : -3);
+        const k = this.cellIndex(x, z);
+        if (k < 0 || this.blocked[k] || this.nearStructure(x, z, 6)) continue;
+        D.fences.push({ x, z, len: r.int(3, 6), rot: Math.atan2(Math.cos(x * 0.05 + this.phase) * 0.3, 1) });
+      }
+    }
+  }
+  treeKind(outer = false) {
+    const b = this.biome;
+    const r = this.rng;
+    if (b === 'desert') return r.chance(0.6) ? 'palm' : 'cactus';
+    if (b === 'winter') return r.chance(0.8) ? 'pine' : 'bare';
+    if (this.scenario === 'forest') return r.chance(0.55) ? 'pine' : 'oak';
+    return r.chance(outer ? 0.5 : 0.35) ? 'pine' : r.chance(0.85) ? 'oak' : 'birch';
+  }
+
+  // Terrain-Rasterinfo für den Renderer
+  get extent() { return { EXT_X, EXT_Z, STEP }; }
+}

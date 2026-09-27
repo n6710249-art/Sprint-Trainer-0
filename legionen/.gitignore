@@ -1,0 +1,3 @@
+build/
+game/node_modules/
+tools/*.jar

@@ -1,0 +1,16 @@
+{
+  "name": "legionen",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lowpoly Mini-Schlachten – Legionen gegen den Bot",
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --minify --format=iife --target=es2019 --outfile=www/game.js",
+    "watch": "esbuild src/main.js --bundle --format=iife --target=es2019 --outfile=www/game.js --watch --sourcemap"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

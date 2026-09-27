@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f1424" />
+  <title>Legionen</title>
+  <link rel="icon" href="icon.png" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="labels"></div>
+
+  <!-- Ladebildschirm -->
+  <div id="loading" class="screen show">
+    <div class="load-inner">
+      <div class="logo">LEGIONEN</div>
+      <div class="load-bar"><i></i></div>
+    </div>
+  </div>
+
+  <!-- Hauptmenü -->
+  <section id="scr-menu" class="screen">
+    <div class="menu-card">
+      <div class="logo">LEGIONEN</div>
+      <div class="tagline">Taktische Mini-Schlachten</div>
+      <button class="btn primary big" data-act="new">⚔&nbsp; Neue Schlacht</button>
+      <button class="btn big" data-act="quick">🎲&nbsp; Schnelle Schlacht</button>
+      <div class="row">
+        <button class="btn" data-act="help">Anleitung</button>
+        <button class="btn" data-act="settings">Einstellungen</button>
+      </div>
+      <div class="stats" id="menu-stats"></div>
+    </div>
+    <div class="menu-foot">Löwenlegion gegen Rabenclan · Einzelspieler</div>
+  </section>
+
+  <!-- Schlacht-Einrichtung -->
+  <section id="scr-setup" class="screen">
+    <div class="setup">
+      <header class="setup-head">
+        <button class="btn icon" data-act="menu" aria-label="Zurück">‹</button>
+        <h2>Schlacht vorbereiten</h2>
+        <button class="btn primary" data-act="deploy">Zur Aufstellung ▶</button>
+      </header>
+      <div class="setup-cols">
+        <div class="col">
+          <h3>Schlachtfeld</h3>
+          <div class="scen-grid" id="scen-grid"></div>
+          <p class="scen-desc" id="scen-desc"></p>
+          <div class="opt-row"><span>Jahreszeit</span><div class="chips" id="biome-chips"></div></div>
+          <div class="opt-row"><span>Gegner</span><div class="chips" id="diff-chips"></div></div>
+        </div>
+        <div class="col">
+          <h3>Deine Armee <small>1–5 Legionen</small></h3>
+          <div class="slots" id="army-slots"></div>
+          <div class="type-grid" id="type-grid"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div class="hud-top">
+      <button class="btn icon" id="btn-exit" aria-label="Menü">☰</button>
+      <div class="hud-title">
+        <div id="hud-phase">Aufstellung</div>
+        <div id="hud-goal"></div>
+      </div>
+      <div class="hud-battle" id="hud-battle">
+        <div class="strength"><b id="str0">0</b><div class="sbar"><i id="sbar0"></i><i id="sbar1"></i></div><b id="str1">0</b></div>
+        <div class="obj" id="hud-obj"></div>
+      </div>
+      <div class="hud-right">
+        <div class="timer" id="hud-time">0:00</div>
+        <div class="speed" id="speed-ctl">
+          <button class="btn icon" id="btn-pause" aria-label="Pause">❚❚</button>
+          <button class="btn chip-s" data-speed="1">1×</button>
+          <button class="btn chip-s" data-speed="2">2×</button>
+          <button class="btn chip-s" data-speed="3">3×</button>
+        </div>
+        <button class="btn icon" id="btn-sound" aria-label="Ton">🔊</button>
+      </div>
+    </div>
+    <div class="hint" id="hint"></div>
+    <div class="feed" id="feed"></div>
+    <div class="pause-banner" id="pause-banner">PAUSE · Taktikmodus – Befehle ändern und weiter</div>
+
+    <div class="hud-bottom">
+      <div class="roster" id="roster"></div>
+      <div class="actions" id="actions"></div>
+    </div>
+
+    <!-- Befehlspanel -->
+    <div class="orders" id="orders">
+      <div class="orders-head">
+        <div class="oh-icon" id="oh-icon"></div>
+        <div class="oh-text"><b id="oh-name"></b><span id="oh-sub"></span></div>
+        <button class="btn icon small" id="oh-close" aria-label="Schließen">✕</button>
+      </div>
+      <div class="tabs" id="tabs">
+        <button data-tab="move" class="on">Bewegung</button>
+        <button data-tab="attack">Angriff</button>
+        <button data-tab="retreat">Rückzug</button>
+      </div>
+      <div class="tab-body" id="tab-body"></div>
+      <div class="orders-foot">
+        <button class="btn small" id="btn-copy">Für alle übernehmen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ergebnis -->
+  <section id="scr-result" class="screen">
+    <div class="result-card">
+      <div class="result-title" id="res-title">SIEG</div>
+      <div class="result-reason" id="res-reason"></div>
+      <div class="result-stats" id="res-stats"></div>
+      <div class="row">
+        <button class="btn primary" data-act="rematch">↻ Revanche</button>
+        <button class="btn" data-act="new">Neue Schlacht</button>
+        <button class="btn" data-act="menu">Menü</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Dialoge -->
+  <section id="dlg" class="screen dim">
+    <div class="dlg-card">
+      <div class="dlg-body" id="dlg-body"></div>
+      <div class="row" id="dlg-actions"></div>
+    </div>
+  </section>
+
+  <div id="toast"></div>
+  <script src="game.js"></script>
+</body>
+</html>
