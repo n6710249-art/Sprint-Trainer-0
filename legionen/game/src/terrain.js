@@ -7,7 +7,7 @@ const EXT_X = 112, EXT_Z = 80; // gerenderte Fläche (mit Randgebirge)
 const STEP = 1.5;
 export const CELL = 2;
 
-export const G_GRASS = 0, G_DIRT = 1, G_SAND = 2, G_ROCK = 3, G_BED = 4, G_SNOWCAP = 5, G_FLOOR = 6;
+export const G_GRASS = 0, G_DIRT = 1, G_SAND = 2, G_ROCK = 3, G_BED = 4, G_SNOWCAP = 5, G_FLOOR = 6, G_MARSH = 7;
 
 export class BattleMap {
   constructor(scenario, biome, seed) {
@@ -81,6 +81,12 @@ export class BattleMap {
       this.hasWater = true; // Burggraben
     }
 
+    // Charakter der Landschaft: mal flach, mal hügelig
+    this.hilly = sc === 'canyon' ? 1 : r.range(0.55, 1.7) * (this.biome === 'highland' ? 1.35 : 1);
+    this.freq = r.range(0.016, 0.03);
+    this.features = this.pickFeatures();
+    if (this.features.some((f) => f.type === 'marsh' || f.type === 'lake')) this.hasWater = true;
+
     const hAt = (x, z) => this.heightFn(x, z);
     for (let j = 0; j < this.nz; j++) {
       for (let i = 0; i < this.nx; i++) {
@@ -110,10 +116,118 @@ export class BattleMap {
     return Math.sin(z * rv.freq + rv.ph) * rv.amp + this.noise(z * 0.05, 9.1) * 3;
   }
 
+  // ---------- Geländemerkmale ----------
+  pickFeatures() {
+    const r = this.rng, sc = this.scenario;
+    const out = [];
+    if (sc === 'canyon') return out;
+    const c = this.castle;
+    // freier Mittelbereich zwischen den Aufstellungszonen (bei Burgen: zwischen Burg und Angreifern)
+    const xr = c ? (c.cx > 0 ? [-38, 12] : [-12, 38]) : [-38, 38];
+    const pool = sc === 'forest' ? ['marsh', 'village', 'ridge', 'hedges', 'lake', 'ruins', 'pillars']
+      : sc === 'river' ? ['ridge', 'village', 'hedges', 'plateau', 'pillars', 'ruins', 'marsh']
+      : c ? ['village', 'hedges', 'ridge', 'marsh', 'pillars', 'ruins']
+      : ['ridge', 'plateau', 'village', 'marsh', 'lake', 'hedges', 'pillars', 'ruins'];
+    const n = c ? r.int(1, 2) : r.int(2, 3);
+    const rad = { ridge: 10, plateau: 12, village: 11, marsh: 10, lake: 9, hedges: 12, pillars: 7, ruins: 5 };
+    const ok = (x, z, rr) => {
+      if (this.objective && Math.hypot(x - this.objective.x, z - this.objective.z) < rr + 12) return false;
+      if (this.river && Math.abs(x - this.riverX(z)) < rr + 9) return false;
+      if (c && Math.max(Math.abs(x - c.cx), Math.abs(z - c.cz)) < c.half + 10 + rr) return false;
+      return !out.some((f) => Math.hypot(f.x - x, f.z - z) < f.rad + rr + 6);
+    };
+    const bag = pool.slice();
+    for (let i = 0; i < n && bag.length; i++) {
+      const type = bag.splice(r.int(0, Math.min(bag.length - 1, 3)), 1)[0];
+      const rr = rad[type] * r.range(0.85, 1.2);
+      let placed = null;
+      for (let t = 0; t < 60 && !placed; t++) {
+        const x = r.range(xr[0] + rr * 0.6, xr[1] - rr * 0.6), z = r.range(-40 + rr * 0.5, 40 - rr * 0.5);
+        if (ok(x, z, rr)) placed = { type, x, z, rad: rr };
+      }
+      if (!placed) continue;
+      const f = placed;
+      if (type === 'ridge') {
+        const a = r.range(-0.6, 0.6) + Math.PI / 2; // grob quer zur Frontlinie (Nord-Süd)
+        f.len = r.range(26, 44); f.a = a; f.h = r.range(3.5, 6); f.w = r.range(5, 8);
+        f.gap = r.chance(0.7) ? r.range(-0.3, 0.3) : null; // Pass durch den Kamm
+        f.rad = f.len / 2;
+      } else if (type === 'plateau') {
+        f.h = r.range(4, 6); f.ramps = [r.range(0, 6.28)]; f.ramps.push(f.ramps[0] + Math.PI + r.range(-0.6, 0.6));
+      } else if (type === 'village') {
+        f.houses = r.int(5, 8);
+      } else if (type === 'hedges') {
+        f.kind = this.biome === 'desert' || this.biome === 'winter' || this.biome === 'highland' ? 'wall' : 'hedge';
+      }
+      out.push(f);
+    }
+    return out;
+  }
+
+  featureHeight(x, z, h, g) {
+    const N = this.noise;
+    for (const f of this.features) {
+      const dx = x - f.x, dz = z - f.z;
+      if (Math.abs(dx) > f.rad + 16 || Math.abs(dz) > f.rad + 16) continue;
+      const d = Math.hypot(dx, dz);
+      switch (f.type) {
+        case 'ridge': {
+          const ux = Math.cos(f.a), uz = Math.sin(f.a);
+          let t = (dx * ux + dz * uz) / (f.len / 2);
+          const tc = Math.max(-1, Math.min(1, t));
+          const px = f.x + ux * tc * f.len / 2, pz = f.z + uz * tc * f.len / 2;
+          const dd = Math.hypot(x - px, z - pz) + Math.max(0, Math.abs(t) - 1) * 4;
+          let k = Math.exp(-((dd / f.w) ** 2));
+          if (f.gap !== null) k *= 1 - 0.9 * Math.exp(-(((t - f.gap) * f.len / 2 / 4.5) ** 2));
+          h += f.h * k * (0.85 + 0.3 * N(x * 0.15, z * 0.15));
+          if (k > 0.75 && g === G_GRASS && N(x * 0.3, z * 0.3) > 0.1) g = G_ROCK;
+          break;
+        }
+        case 'plateau': {
+          const ang = Math.atan2(dz, dx);
+          let ramp = 0;
+          for (const ra of f.ramps) { let da = Math.abs(((ang - ra + Math.PI * 3) % (Math.PI * 2)) - Math.PI); ramp = Math.max(ramp, Math.max(0, 1 - da / 0.45)); }
+          const edge = 2.2 + ramp * 13;
+          const rr = f.rad + N(ang * 2, 3.3) * 1.5;
+          const k = 1 - Math.max(0, Math.min(1, (d - rr + edge) / edge));
+          h = Math.max(h, h * 0.3 + f.h * k + (k > 0.98 ? N(x * 0.2, z * 0.2) * 0.2 : 0));
+          if (k > 0.08 && k < 0.92 && ramp < 0.3) g = G_ROCK;
+          break;
+        }
+        case 'marsh': {
+          const rr = f.rad * (1 + N(x * 0.08, z * 0.08) * 0.35);
+          const k = 1 - Math.max(0, Math.min(1, (d - rr * 0.6) / (rr * 0.4)));
+          if (k > 0) {
+            h = h * (1 - k) + (this.waterLevel - 0.12 + N(x * 0.22, z * 0.22) * 0.45) * k;
+            if (k > 0.3) g = G_MARSH;
+          }
+          break;
+        }
+        case 'lake': {
+          const rr = f.rad * (1 + N(x * 0.07, z * 0.07 + 5) * 0.3);
+          const k = 1 - Math.max(0, Math.min(1, (d - rr * 0.55) / (rr * 0.45)));
+          if (k > 0) { h = h * (1 - k) + -2.6 * k; g = k > 0.55 ? G_BED : G_SAND; }
+          break;
+        }
+        case 'village': {
+          const k = 1 - Math.max(0, Math.min(1, (d - f.rad) / 7));
+          if (k > 0) h = h * (1 - k) + (f.h0 ?? (f.h0 = h)) * k;
+          if (d < f.rad * 0.38 || (d < f.rad && Math.abs(N(x * 0.3, z * 0.3)) < 0.06)) g = G_DIRT;
+          break;
+        }
+      }
+    }
+    return [h, g];
+  }
+
   heightFn(x, z) {
     const N = this.noise;
-    let h = N.fbm(x * 0.022, z * 0.022, 4) * 3.2 + N(x * 0.09, z * 0.09) * 0.35;
+    const fr = this.freq || 0.022;
+    let h = N.fbm(x * fr, z * fr, 4) * 3.2 * (this.hilly || 1) + N(x * 0.09, z * 0.09) * 0.35;
+    // Wüste: Dünenkämme
+    if (this.biome === 'desert' && this.scenario !== 'canyon') h += Math.abs(N(x * 0.035 + z * 0.012, z * 0.02)) * 2.2 - 0.6;
     let g = G_GRASS;
+    if (this.features && this.features.length) [h, g] = this.featureHeight(x, z, h, g);
 
     // Randgebirge außerhalb der Spielfläche
     const ex = Math.max(0, Math.abs(x) - 74), ez = Math.max(0, Math.abs(z) - 49);
@@ -218,9 +332,56 @@ export class BattleMap {
   }
 
   // ---------- Strukturen ----------
+  placeFeatureStructures() {
+    const r = this.rng;
+    for (const f of this.features) {
+      if (f.type === 'village') {
+        const n = f.houses;
+        for (let i = 0; i < n; i++) {
+          for (let t = 0; t < 20; t++) {
+            const a = (i / n) * Math.PI * 2 + r.range(-0.3, 0.3), d = f.rad * r.range(0.5, 0.95);
+            const x = f.x + Math.cos(a) * d, z = f.z + Math.sin(a) * d;
+            const rot = [0, Math.PI / 2, Math.PI, -Math.PI / 2][Math.round(((a + Math.PI) / (Math.PI / 2))) % 4];
+            const w = Math.abs(Math.sin(rot)) > 0.5 ? 4 : 5, dd = w === 4 ? 5 : 4;
+            if (this.structures.some((s2) => s2.kind === 'house' && Math.hypot(s2.x - x, s2.z - z) < 7.5)) continue;
+            this.structures.push({ kind: 'house', x, z, rot: rot + Math.PI, w, d: dd, village: true, roof: r.int(0, 2) });
+            break;
+          }
+        }
+        this.structures.push({ kind: 'well', x: f.x + r.range(-1.5, 1.5), z: f.z + r.range(-1.5, 1.5) });
+        for (let i = 0; i < 3; i++) {
+          const a = r() * 6.28, d = f.rad * 0.3;
+          this.decor.stalls = this.decor.stalls || [];
+          this.decor.stalls.push({ x: f.x + Math.cos(a) * d + 3, z: f.z + Math.sin(a) * d, rot: a, col: r.int(0, 3) });
+        }
+      } else if (f.type === 'hedges') {
+        const segs = r.int(3, 5);
+        for (let i = 0; i < segs; i++) {
+          const x = Math.max(-38, Math.min(38, f.x + r.range(-f.rad, f.rad))), z = Math.max(-42, Math.min(42, f.z + r.range(-f.rad, f.rad)));
+          if (this.castle && Math.max(Math.abs(x - this.castle.cx), Math.abs(z - this.castle.cz)) < this.castle.half + 14) continue;
+          const rot = r.chance(0.6) ? Math.PI / 2 + r.range(-0.3, 0.3) : r.range(-0.3, 0.3);
+          this.structures.push({ kind: 'hedge', x, z, len: r.range(7, 13), rot, style: f.kind });
+        }
+      } else if (f.type === 'pillars') {
+        const n = r.int(3, 6);
+        for (let i = 0; i < n; i++) {
+          const a = r() * 6.28, d = r() * f.rad;
+          this.structures.push({ kind: 'spire', x: f.x + Math.cos(a) * d, z: f.z + Math.sin(a) * d, r: r.range(1.2, 2.2), h: r.range(5, 11) });
+        }
+      } else if (f.type === 'ruins') {
+        this.decor.ruins.push({ x: f.x, z: f.z, r: 2.6 });
+        for (let i = 0; i < 3; i++) {
+          const a = r() * 6.28;
+          this.structures.push({ kind: 'hedge', x: f.x + Math.cos(a) * 5, z: f.z + Math.sin(a) * 5, len: r.range(3, 6), rot: a + Math.PI / 2, style: 'ruin' });
+        }
+      }
+    }
+  }
+
   placeStructures() {
     const r = this.rng;
     const c = this.castle;
+    this.placeFeatureStructures();
     if (c) {
       const H = 6.2, T = 2.2, hf = c.half;
       const face = c.face; // -1: Tor zeigt nach Westen, +1: nach Osten
@@ -358,6 +519,20 @@ export class BattleMap {
       if (s.kind === 'wall' || s.kind === 'keep' || s.kind === 'house') {
         const w = (s.w || 5) / 2 + 0.9, d = (s.d || 4) / 2 + 0.9;
         this.markRect(s.x - w, s.z - d, s.x + w, s.z + d, (k) => { this.blocked[k] = 1; });
+      } else if (s.kind === 'hedge') {
+        const n = Math.ceil(s.len / 1);
+        for (let i = 0; i <= n; i++) {
+          const t = i / n - 0.5;
+          const x = s.x + Math.cos(s.rot) * t * s.len, z = s.z + Math.sin(s.rot) * t * s.len;
+          const k = this.cellIndex(x, z);
+          if (k >= 0) this.blocked[k] = 1;
+        }
+      } else if (s.kind === 'spire') {
+        const rr = s.r + 0.6;
+        this.markRect(s.x - rr, s.z - rr, s.x + rr, s.z + rr, (k) => {
+          const [x, z] = this.cellCenter(k);
+          if (Math.hypot(x - s.x, z - s.z) < rr + 0.4) this.blocked[k] = 1;
+        });
       } else if (s.kind === 'tower' || s.kind === 'well') {
         const rr = (s.r || 1.2) + 0.8;
         this.markRect(s.x - rr, s.z - rr, s.x + rr, s.z + rr, (k) => {
@@ -430,6 +605,9 @@ export class BattleMap {
   }
 
   nearStructure(x, z, d) {
+    for (const f of this.features || []) {
+      if ((f.type === 'village' || f.type === 'lake' || f.type === 'pillars' || f.type === 'ruins') && Math.hypot(x - f.x, z - f.z) < f.rad + d) return true;
+    }
     if (this.castle && Math.max(Math.abs(x - this.castle.cx), Math.abs(z - this.castle.cz)) < this.castle.half + 9 + d * 0.3) return true;
     for (const b of this.bridges) if (Math.hypot(x - b.x, z - b.z) < d + b.len / 2) return true;
     if (this.scenario === 'river' && this.fords.some((fz) => Math.abs(z - fz) < d && Math.abs(x - this.riverX(fz)) < d + 6)) return true;
@@ -679,6 +857,8 @@ export class BattleMap {
     const r = this.rng;
     if (b === 'desert') return r.chance(0.6) ? 'palm' : 'cactus';
     if (b === 'winter') return r.chance(0.8) ? 'pine' : 'bare';
+    if (b === 'highland') return r.chance(0.6) ? 'pine' : r.chance(0.5) ? 'bare' : 'oak';
+    if (b === 'spring') return r.chance(0.3) ? 'pine' : r.chance(0.75) ? 'oak' : 'birch';
     if (this.scenario === 'forest') return r.chance(0.55) ? 'pine' : 'oak';
     return r.chance(outer ? 0.5 : 0.35) ? 'pine' : r.chance(0.85) ? 'oak' : 'birch';
   }

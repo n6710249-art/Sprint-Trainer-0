@@ -113,7 +113,9 @@ export class UnitRenderer {
     return r;
   }
 
+  // selected: einzelne Legion oder Set mehrerer Legionen
   update(t, dt, selected, hover) {
+    const has = (L) => (selected instanceof Set ? selected.has(L) : selected === L);
     const map = this.map;
     for (const L of this.legions) {
       const def = this.defs[L.side + ':' + L.typeId];
@@ -206,14 +208,14 @@ export class UnitRenderer {
         if (st.g.rotation.z >= 1.4) st.g.visible = false;
       }
       // Ring
-      const isSel = selected === L || hover === L;
+      const isSel = has(L) || hover === L;
       if (isSel && L.alive) {
         const r = this.ringFor(L);
         r.visible = true;
         const rad = Math.max(L.halfW, L.halfD) + 1.2;
         r.scale.set(rad, 1, rad);
         r.position.set(L.x, map.getHeight(L.x, L.z) + 0.25, L.z);
-        r.material.opacity = selected === L ? 0.65 + Math.sin(t * 5) * 0.2 : 0.45;
+        r.material.opacity = has(L) ? 0.65 + Math.sin(t * 5) * 0.2 : 0.45;
       } else if (this.rings.has(L)) this.rings.get(L).visible = false;
     }
     for (const g in this.meshes) this.meshes[g].instanceMatrix.needsUpdate = true;

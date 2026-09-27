@@ -70,6 +70,12 @@ export class Stage {
   // Kamera
   updateCamera(dt) {
     const c = this.cam;
+    if (this.vel) {
+      this.pan(this.vel.x * dt, this.vel.y * dt);
+      const d = Math.exp(-dt * 4.5);
+      this.vel.x *= d; this.vel.y *= d;
+      if (Math.hypot(this.vel.x, this.vel.y) < 15) this.vel = null;
+    }
     const k = 1 - Math.exp(-dt * 9);
     c.tx = Math.max(-this.bounds.x, Math.min(this.bounds.x, c.tx));
     c.tz = Math.max(-this.bounds.z, Math.min(this.bounds.z, c.tz));
@@ -100,6 +106,14 @@ export class Stage {
     c.tx -= (rx * dxPx - fx * dyPx) * scale;
     c.tz -= (rz * dxPx - fz * dyPx) * scale;
   }
+  // Schwung nach dem Wischen
+  fling(vx, vy) {
+    const sp = Math.hypot(vx, vy);
+    if (sp < 120) return;
+    const k = Math.min(1, 2400 / sp);
+    this.vel = { x: vx * k, y: vy * k };
+  }
+  stopFling() { this.vel = null; }
   zoom(f) { this.cam.tdist *= f; }
   rotate(d) { this.cam.tyaw += d; }
   tilt(d) { this.cam.tpitch += d; }
@@ -317,6 +331,96 @@ export class Overlays {
       A.rotation.y = S.face;
       A.scale.setScalar(1.8);
     }
+  }
+
+  // ---------- RTS-Rückmeldungen ----------
+  rectAt(L, x, z, face, color, opacity) {
+    const H = (px, pz) => Math.max(this.map.getHeight(px, pz), this.map.hasWater ? this.map.waterLevel : -99) + 0.5;
+    const fx = Math.sin(face), fz = Math.cos(face), lx = fz, lz = -fx;
+    const w = L.halfW + 0.2, d = L.halfD + 0.2;
+    const pts = [];
+    const corners = [[-w, d], [w, d], [w, -d], [-w, -d]];
+    for (let c = 0; c < 4; c++) {
+      const [a0, b0] = corners[c], [a1, b1] = corners[(c + 1) % 4];
+      for (let i = 0; i < 6; i++) {
+        const f = i / 6, a = a0 + (a1 - a0) * f, b = b0 + (b1 - b0) * f;
+        const px = x + lx * a + fx * b, pz = z + lz * a + fz * b;
+        pts.push(new THREE.Vector3(px, H(px, pz), pz));
+      }
+    }
+    const g = new THREE.BufferGeometry().setFromPoints(pts);
+    const line = new THREE.LineLoop(g, new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false }));
+    line.renderOrder = 6;
+    // kleiner Pfeil vorn = Blickrichtung
+    const tx = x + fx * (d + 1.2), tz = z + fz * (d + 1.2);
+    const ag = new THREE.BufferGeometry();
+    ag.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0.9, -0.7, 0, -0.5, 0.7, 0, -0.5], 3));
+    const arrow = new THREE.Mesh(ag, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide }));
+    arrow.position.set(tx, H(tx, tz), tz);
+    arrow.rotation.y = face;
+    arrow.renderOrder = 6;
+    const grp = new THREE.Group();
+    grp.add(line, arrow);
+    return grp;
+  }
+
+  // Vorschau beim Ziehen (bleibt bis clearGhosts)
+  showGhosts(plan) {
+    this.clearGhosts();
+    this.ghosts = new THREE.Group();
+    for (const p of plan) this.ghosts.add(this.rectAt(p.L, p.x, p.z, p.face, 0xffe07a, 0.9));
+    this.group.add(this.ghosts);
+  }
+  clearGhosts() {
+    if (!this.ghosts) return;
+    this.group.remove(this.ghosts);
+    this.ghosts.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    this.ghosts = null;
+  }
+
+  // Marschbefehl bestätigen: Ring an der Zielstelle + kurz aufleuchtende Zielplätze
+  pingMove(x, z, plan, color = 0x7fe07a) {
+    this.pings = this.pings || [];
+    const geo = new THREE.RingGeometry(0.75, 1, 32, 1);
+    geo.rotateX(-Math.PI / 2);
+    const ring = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide }));
+    ring.position.set(x, Math.max(this.map.getHeight(x, z), this.map.hasWater ? this.map.waterLevel : -99) + 0.6, z);
+    ring.renderOrder = 6;
+    this.group.add(ring);
+    this.pings.push({ obj: ring, t: 0, ttl: 0.9, kind: 'ring' });
+    for (const p of plan || []) {
+      const r = this.rectAt(p.L, p.x, p.z, p.face, color, 0.85);
+      this.group.add(r);
+      this.pings.push({ obj: r, t: 0, ttl: 1.6, kind: 'rect' });
+    }
+  }
+  pingAttack(E) {
+    this.pings = this.pings || [];
+    const rad = Math.max(E.halfW, E.halfD) + 1.5;
+    const geo = new THREE.RingGeometry(rad - 0.5, rad, 40, 1);
+    geo.rotateX(-Math.PI / 2);
+    const ring = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xff4a3a, transparent: true, opacity: 0.95, depthWrite: false, side: THREE.DoubleSide }));
+    ring.position.set(E.x, this.map.getHeight(E.x, E.z) + 0.6, E.z);
+    ring.renderOrder = 6;
+    this.group.add(ring);
+    this.pings.push({ obj: ring, t: 0, ttl: 0.8, kind: 'attack', L: E });
+  }
+  updatePings(dt) {
+    if (!this.pings || !this.pings.length) return;
+    for (const p of this.pings) {
+      p.t += dt;
+      const k = p.t / p.ttl;
+      if (p.kind === 'ring') { const s = 1 + k * 3.5; p.obj.scale.set(s, 1, s); p.obj.material.opacity = 0.9 * (1 - k); }
+      else if (p.kind === 'attack') { const s = 1.25 - k * 0.3; p.obj.scale.set(s, 1, s); p.obj.position.x = p.L.x; p.obj.position.z = p.L.z; p.obj.material.opacity = 0.95 * (1 - k); }
+      else p.obj.traverse((o) => { if (o.material) o.material.opacity = 0.85 * (1 - k * k); });
+    }
+    const alive = [];
+    for (const p of this.pings) {
+      if (p.t < p.ttl) { alive.push(p); continue; }
+      this.group.remove(p.obj);
+      p.obj.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    }
+    this.pings = alive;
   }
 
   dispose() {

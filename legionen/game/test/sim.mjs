@@ -11,7 +11,7 @@ let fails = 0;
 for (const sc of SCENARIO_ORDER) {
   for (let r = 0; r < runs; r++) {
     resetIds();
-    const seed = 1000 + r * 77 + sc.length;
+    const seed = (+(process.env.SEED || 1000)) + r * 77 + sc.length;
     const t0 = Date.now();
     const map = new BattleMap(sc, ['summer', 'winter', 'desert', 'autumn'][r % 4], seed);
     const rng = mulberry32(seed);

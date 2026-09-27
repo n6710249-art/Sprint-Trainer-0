@@ -187,6 +187,8 @@ h3 small { font-family: system-ui, sans-serif; text-transform: none; letter-spac
 .og p { margin: 5px 1px 0; font-size: 11px; color: #c9cfdd; line-height: 1.3; opacity: .85; }
 .orders-foot { padding: 6px 10px 8px; display: flex; justify-content: flex-end; gap: 6px; border-top: 1px solid rgba(255,255,255,.06); }
 
+#selbox { position: fixed; display: none; z-index: 7; pointer-events: none; border: 1.5px dashed var(--gold-2); background: rgba(227,180,65,.12); border-radius: 6px; }
+
 /* Legionsschilder */
 #labels { position: fixed; inset: 0; pointer-events: none; z-index: 5; overflow: hidden; }
 .lbl { position: absolute; left: 0; top: 0; transform: translate(-50%, -100%); pointer-events: auto; display: flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; will-change: transform; }

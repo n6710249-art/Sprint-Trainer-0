@@ -59,6 +59,97 @@ export class Battle {
     if (L.state !== 'retreat' && L.state !== 'regroup' && L.state !== 'dead') L.state = 'idle';
   }
 
+  // ---------- Direkte Befehle (RTS-Steuerung) ----------
+  // Zielplätze einer Gruppe: Nahkämpfer vorn nebeneinander, Reiter an den Flanken, Schützen dahinter
+  planMove(legs, x, z, face = null) {
+    legs = legs.filter((l) => l.alive);
+    if (!legs.length) return [];
+    let cx = 0, cz = 0;
+    for (const L of legs) { cx += L.x; cz += L.z; }
+    cx /= legs.length; cz /= legs.length;
+    if (face === null) face = Math.hypot(x - cx, z - cz) > 1 ? Math.atan2(x - cx, z - cz) : legs[0].face;
+    const fx = Math.sin(face), fz = Math.cos(face), lx = fz, lz = -fx;
+    const front = legs.filter((l) => !l.isRanged && l.typeId !== 'cavalry');
+    const back = legs.filter((l) => l.isRanged);
+    const cav = legs.filter((l) => l.typeId === 'cavalry');
+    let row1 = front.slice();
+    cav.forEach((c, i) => (i % 2 ? row1.push(c) : row1.unshift(c)));
+    let row2 = back;
+    if (!row1.length) { row1 = row2; row2 = []; }
+    const gap = 2.2;
+    const out = [];
+    const placeRow = (row, depth) => {
+      const total = row.reduce((a, L) => a + L.halfW * 2, 0) + gap * (row.length - 1);
+      let off = total / 2;
+      for (const L of row) {
+        off -= L.halfW;
+        const [px, pz] = this.snapFree(x + lx * off + fx * depth, z + lz * off + fz * depth, L.side);
+        out.push({ L, x: px, z: pz, face });
+        off -= L.halfW + gap;
+      }
+    };
+    placeRow(row1, 0);
+    if (row2.length) {
+      const d1 = Math.max(...row1.map((L) => L.halfD)), d2 = Math.max(...row2.map((L) => L.halfD));
+      placeRow(row2, -(d1 + d2 + 3));
+    }
+    return out;
+  }
+
+  commandMove(legs, x, z, face = null) {
+    const plan = this.planMove(legs, x, z, face);
+    const slow = Math.min(...plan.map((p) => p.L.T.speed));
+    for (const p of plan) {
+      const L = p.L;
+      if (L.state === 'retreat' || L.state === 'regroup') continue;
+      L.orders.move = 'path';
+      L.orders.waypoints = [[p.x, p.z]];
+      L.cmd = { x: p.x, z: p.z, face: p.face };
+      L.cmdFace = null;
+      L.moveOnly = true;
+      L.orders.delay = 0;
+      L.groupSpeed = plan.length > 1 ? slow : null;
+      if (L.melee) { L.melee = null; }
+      this.applyOrders(L);
+      L.target = null;
+    }
+    return plan;
+  }
+
+  commandAttack(legs, E) {
+    for (const L of legs) {
+      if (!L.alive || L.state === 'retreat') continue;
+      this.clearCommand(L);
+      L.orders.target = 'legion';
+      L.orders.targetId = E.id;
+      L.orders.move = 'advance';
+      L.orders.delay = 0;
+      if (L.melee && L.melee !== E) L.melee = null;
+      this.applyOrders(L);
+      L.target = E;
+    }
+  }
+
+  commandHalt(legs) {
+    for (const L of legs) {
+      if (!L.alive || L.state === 'retreat') continue;
+      this.clearCommand(L);
+      L.orders.move = 'hold';
+      L.path = [];
+      this.applyOrders(L);
+      L.holdX = L.x; L.holdZ = L.z;
+      L.cmdFace = L.face;
+    }
+  }
+
+  commandRetreat(legs) {
+    for (const L of legs) if (L.alive && L.state !== 'retreat' && L.state !== 'regroup') { this.clearCommand(L); this.startRetreat(L); }
+  }
+
+  clearCommand(L) {
+    L.cmd = null; L.cmdFace = null; L.moveOnly = false; L.groupSpeed = null;
+  }
+
   flankWaypoints(L, sideSign) {
     const ens = this.enemiesOf(L.side);
     let ex = L.side === 0 ? 50 : -50, ez = 0;
@@ -188,7 +279,7 @@ export class Battle {
     }
     this.separate(dt);
     this.resolveVolleys();
-    for (const L of this.legions) this.updateSoldiers(L, dt);
+    if (this.soldiersInStep !== false) for (const L of this.legions) this.updateSoldiers(L, dt);
     this.arrows = this.arrows.filter((a) => this.time < a.t0 + a.dur + 0.05);
     this.checkAcc += dt;
     if (this.checkAcc > 0.2) { this.updateObjective(this.checkAcc); this.checkAcc = 0; this.checkVictory(); }
@@ -241,12 +332,23 @@ export class Battle {
 
     // Wegpunkte (Flanke / eigene Route)
     const aggro = this.aggroRadius(L);
+    // Marschbefehl erreicht -> Stellung beziehen und ausrichten
+    if (L.cmd && L.wp && L.wpIdx >= L.wp.length) {
+      L.orders.move = 'hold';
+      L.holdX = L.cmd.x; L.holdZ = L.cmd.z;
+      L.cmdFace = L.cmd.face;
+      L.cmd = null; L.moveOnly = false; L.groupSpeed = null;
+      L.wp = []; L.state = 'hold'; L.path = [];
+      return;
+    }
     if (L.wp && L.wpIdx < L.wp.length) {
-      if (this.keepEngaging(L, aggro)) return;
-      const threat = this.nearestEnemy(L, aggro);
-      if (threat) { this.engage(L, threat); return; }
+      if (!L.moveOnly) {
+        if (this.keepEngaging(L, aggro)) return;
+        const threat = this.nearestEnemy(L, aggro);
+        if (threat) { this.engage(L, threat); return; }
+      }
       const w = L.wp[L.wpIdx];
-      if (Math.hypot(w[0] - L.x, w[1] - L.z) < 4) { L.wpIdx++; L.path = []; return; }
+      if (Math.hypot(w[0] - L.x, w[1] - L.z) < (L.cmd ? 2.4 : 4)) { L.wpIdx++; L.path = []; return; }
       this.moveTo(L, w[0], w[1], 'move');
       return;
     }
@@ -285,7 +387,7 @@ export class Battle {
     const o = L.orders;
     const R = L.T.range;
     // Ausweichen vor Nahkämpfern
-    if (o.skirmish) {
+    if (o.skirmish && !L.moveOnly) {
       const threat = this.nearestEnemy(L, 9, (e) => !e.isRanged && e.state !== 'retreat');
       if (threat) {
         const dx = L.x - threat.x, dz = L.z - threat.z, d = Math.hypot(dx, dz) || 1;
@@ -300,10 +402,18 @@ export class Battle {
     let t = null;
     const pri = this.chooseTarget(L, null, R);
     if (pri) t = pri;
+    if (L.cmd && L.wp && L.wpIdx >= L.wp.length) {
+      L.orders.move = 'hold';
+      L.holdX = L.cmd.x; L.holdZ = L.cmd.z;
+      L.cmdFace = L.cmd.face;
+      L.cmd = null; L.moveOnly = false; L.groupSpeed = null;
+      L.wp = []; L.state = 'hold'; L.path = [];
+      return;
+    }
     if (L.wp && L.wpIdx < L.wp.length) {
-      if (t && dist(L, t) < R * 0.9) { L.target = t; L.state = 'shoot'; L.path = []; return; }
+      if (!L.moveOnly && t && dist(L, t) < R * 0.9) { L.target = t; L.state = 'shoot'; L.path = []; return; }
       const w = L.wp[L.wpIdx];
-      if (Math.hypot(w[0] - L.x, w[1] - L.z) < 4) { L.wpIdx++; L.path = []; return; }
+      if (Math.hypot(w[0] - L.x, w[1] - L.z) < (L.cmd ? 2.4 : 4)) { L.wpIdx++; L.path = []; return; }
       this.moveTo(L, w[0], w[1], 'move');
       return;
     }
@@ -529,9 +639,9 @@ export class Battle {
       }
       case 'hold': case 'idle': case 'wait': default: {
         // leichte Ausrichtung zum nächsten Feind
-        const e = this.nearestEnemy(L, 45);
-        if (e && L.state !== 'wait') faceTo = e;
-        else if (e && this.time > 0) faceTo = e;
+        const e = this.nearestEnemy(L, L.cmdFace != null ? 18 : 45);
+        if (e) faceTo = e;
+        else if (L.cmdFace != null) faceTo = { x: L.x + Math.sin(L.cmdFace) * 10, z: L.z + Math.cos(L.cmdFace) * 10 };
         break;
       }
     }
@@ -562,7 +672,7 @@ export class Battle {
   }
 
   turnToward(L, target, dt) {
-    const rate = L.typeId === 'cavalry' ? 3.2 : 2.2;
+    const rate = L.typeId === 'cavalry' ? 2.6 : L.isRanged ? 2.2 : 1.8;
     const d = angDiff(L.face, target);
     const s = clamp(d, -rate * dt, rate * dt);
     L.face += s;
@@ -583,9 +693,19 @@ export class Battle {
     const p = L.path[0];
     let dx = p[0] - L.x, dz = p[1] - L.z;
     const d = Math.hypot(dx, dz);
-    const tol = L.path.length === 1 ? (L.state === 'retreat' ? 3.5 : 1.8) : 0.9;
+    const tol = L.path.length === 1 ? (L.state === 'retreat' ? 3.5 : 1.8) : (L.blockCool > 0 ? 0.5 : 1.6);
     if (d < tol) { L.path.shift(); return L.path.length === 0; }
     dx /= d; dz /= d;
+    // Vorausschau: kurz vor dem Wegpunkt schon in Richtung des nächsten einlenken
+    if (L.path.length > 1 && d < 5) {
+      const q = L.path[1];
+      const ex = q[0] - L.x, ez = q[1] - L.z, e = Math.hypot(ex, ez) || 1;
+      // nur bei sanften Kurven vorauslenken, sonst würde die Legion um den Punkt kreisen
+      const cosTurn = dx * (ex / e) + dz * (ez / e);
+      const w = cosTurn > 0 ? (1 - d / 5) * 0.6 * cosTurn : 0;
+      dx = dx * (1 - w) + (ex / e) * w; dz = dz * (1 - w) + (ez / e) * w;
+      const n = Math.hypot(dx, dz) || 1; dx /= n; dz /= n;
+    }
     // Geländefaktor
     const f = m.flagAt(L.x, L.z);
     let sp = speed;
@@ -593,10 +713,25 @@ export class Battle {
     if (f & 2) sp *= 0.55;
     if (L.orders.formation === 'block') sp *= 0.9;
     if (L.orders.stance === 'aggressive') sp *= 1.05;
+    if (L.groupSpeed && L.state !== 'retreat') sp = Math.min(sp, L.groupSpeed);
     // Hang
     const h0 = m.getHeight(L.x, L.z), h1 = m.getHeight(L.x + dx * 2, L.z + dz * 2);
     if (h1 - h0 > 0.4) sp *= 0.8;
-    L.speedCur += clamp(sp - L.speedCur, -6 * dt, 3 * dt);
+    // sanft abbremsen am Ziel
+    if (L.path.length === 1) sp *= clamp(d / 5, 0.35, 1);
+    // Kurvenfahrt: die Front schwenkt mit begrenzter Drehrate, die Bewegung folgt ihr weich
+    const want = Math.atan2(dx, dz);
+    const diff = angDiff(L.face, want);
+    this.turnToward(L, want, dt);
+    const ad = Math.abs(diff);
+    L.blockCool = Math.max(0, (L.blockCool || 0) - dt);
+    if (ad < 1.3 && d > tol * 2 && L.blockCool <= 0) {
+      const fx = Math.sin(L.face), fz = Math.cos(L.face);
+      dx = dx * 0.55 + fx * 0.45; dz = dz * 0.55 + fz * 0.45;
+      const n = Math.hypot(dx, dz) || 1; dx /= n; dz /= n;
+    }
+    if (L.blockCool <= 0) sp *= ad < 1.3 ? 0.55 + 0.45 * Math.cos(diff) : 0.5; // beim Schwenken langsamer
+    L.speedCur += clamp(sp - L.speedCur, -5 * dt, 2.4 * dt);
     const s = Math.min(d, L.speedCur * dt);
     const nx = L.x + dx * s, nz = L.z + dz * s;
     // Burgtor?
@@ -615,6 +750,7 @@ export class Battle {
       else if (m.isPassable(L.x, nz, L.side)) L.z = nz;
       // an einer Kante hängen geblieben -> sofort neu planen (über die eigene Zellmitte)
       L.blockT = (L.blockT || 0) + dt;
+      L.blockCool = 1.2; // eine Weile direkt statt in Kurven laufen
       if (L.blockT > 0.35) {
         L.blockT = 0;
         const goal = L.state === 'retreat' && L.retreatGoal ? L.retreatGoal : L.path[L.path.length - 1];
@@ -624,7 +760,6 @@ export class Battle {
         L.path = np;
       }
     }
-    this.turnToward(L, Math.atan2(dx, dz), dt);
     return false;
   }
 
@@ -828,7 +963,8 @@ export class Battle {
       if (m.avoidTrees(tx, tz, _tp, L.typeId === 'cavalry' ? 0.45 : 0)) { tx = _tp[0]; tz = _tp[1]; }
       if (m.avoidTrees(s.x, s.z, _tp, 0.5)) { s.x = _tp[0]; s.z = _tp[1]; }
       const dx = tx - s.x, dz = tz - s.z, d = Math.hypot(dx, dz);
-      const step = Math.min(d, (maxSp + d * 1.2) * dt);
+      // weiches Annähern: weit weg zügig, kurz vor dem Platz sanft ausrollen
+      const step = Math.min(d, Math.min(maxSp + d * 1.2, d * 3.2 + 0.35) * dt);
       if (d > 0.02) {
         let nx = s.x + dx / d * step, nz = s.z + dz / d * step;
         if (!m.isPassable(nx, nz, L.side) && m.isPassable(s.x, s.z, L.side)) { nx = s.x; nz = s.z; }

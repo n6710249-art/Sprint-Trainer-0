@@ -2,8 +2,22 @@
 import * as THREE from 'three';
 import { BIOMES, FACTIONS } from './data.js';
 import { StaticBatch, ENV, jitterColor, prep, xf } from './models.js';
-import { G_GRASS, G_DIRT, G_SAND, G_ROCK, G_BED, G_SNOWCAP, G_FLOOR } from './terrain.js';
+import { G_GRASS, G_DIRT, G_SAND, G_ROCK, G_BED, G_SNOWCAP, G_FLOOR, G_MARSH } from './terrain.js';
 import { mulberry32 } from './rng.js';
+
+// Satteldach (Prisma) – First entlang der lokalen X-Achse
+function prismRoof(len, width, height) {
+  const l = len / 2, w = width / 2;
+  const P = [
+    [-l, 0, -w], [l, 0, -w], [l, height, 0], [-l, 0, -w], [l, height, 0], [-l, height, 0],
+    [-l, 0, w], [-l, height, 0], [l, height, 0], [-l, 0, w], [l, height, 0], [l, 0, w],
+    [-l, 0, -w], [-l, height, 0], [-l, 0, w], [l, 0, -w], [l, 0, w], [l, height, 0],
+  ];
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(P.flat(), 3));
+  g.computeVertexNormals();
+  return g;
+}
 
 const _wm = new THREE.Matrix4(), _wq = new THREE.Quaternion(), _we = new THREE.Euler(), _wp = new THREE.Vector3(), _ws = new THREE.Vector3();
 
@@ -30,6 +44,7 @@ export function buildWorld(map, scene) {
     const dryTint = new THREE.Color(B.sand).lerp(new THREE.Color(B.dirt), 0.3);
     const forestFloor = new THREE.Color(B.leaf[3] || B.leaf[0]).multiplyScalar(0.7).lerp(new THREE.Color(B.dirt), 0.35);
     const canyonTint = new THREE.Color(B.cliff[0]);
+    const marsh = new THREE.Color(B.grass[2]).lerp(new THREE.Color(B.dirt), 0.5).multiplyScalar(0.72);
     let p = 0;
     const N = map.noise;
     const setTri = (ax, az, bx, bz, cx, cz, ga, gb, gc) => {
@@ -45,7 +60,7 @@ export function buildWorld(map, scene) {
       const len = Math.hypot(nxn, ny, nzn) || 1;
       ny = Math.abs(ny / len);
       const mx = (v[0] + v[3] + v[6]) / 3, mz = (v[2] + v[5] + v[8]) / 3, my = (ha + hb + hc) / 3;
-      const counts = [0, 0, 0, 0, 0, 0, 0];
+      const counts = [0, 0, 0, 0, 0, 0, 0, 0];
       counts[ga]++; counts[gb]++; counts[gc]++;
       let g = counts.indexOf(Math.max(...counts));
       const n1 = N(mx * 0.045, mz * 0.045), n2 = N(mx * 0.014 + 7.3, mz * 0.014 - 3.1), n3 = N(mx * 0.21, mz * 0.21);
@@ -63,6 +78,7 @@ export function buildWorld(map, scene) {
       else if (g === G_SAND) c.copy(sand).lerp(grass[0], Math.max(0, n3) * 0.25);
       else if (g === G_DIRT) c.copy(dirt).lerp(grass[0], 0.1 + Math.max(0, n3) * 0.25);
       else if (g === G_FLOOR) c.copy(sand).lerp(dirt, 0.35 + n1 * 0.4);
+      else if (g === G_MARSH) c.copy(marsh).lerp(grass[0], Math.max(0, n3) * 0.4);
       else {
         // weicher Übergang durch die Graspalette
         const tt = Math.max(0, Math.min(0.999, n1 * 0.85 + 0.5)) * (grass.length - 1);
@@ -208,10 +224,20 @@ export function buildWorld(map, scene) {
       out.flags.push({ x: s.x, y: b + s.h + 6, z: s.z, side: map.castle.owner, size: 1.8, big: true });
       S.add(ENV.cyl(0.08, 0.08, 6, 4), 0x5a4a3a, s.x, b + s.h + 3, s.z);
     } else if (s.kind === 'house') {
-      S.add(ENV.box(5, 3, 4), 0xe6dcc6, s.x, base + 1.5, s.z, 0, s.rot);
-      S.add(ENV.box(5.2, 0.4, 4.2), 0x6b4a30, s.x, base + 0.2, s.z, 0, s.rot);
-      S.add(ENV.cone(3.9, 2.4, 4), 0x9a4a32, s.x, base + 4.2, s.z, 0, Math.PI / 4 + s.rot);
-      S.add(ENV.box(0.9, 1.6, 0.2), 0x5a3a22, s.x, base + 0.8, s.z + (s.rot ? -2.05 : 2.05));
+      // Fachwerkhaus mit Satteldach
+      const roofs = [0x9a4a32, 0xb8964e, 0x5d6878];
+      const wallC = map.biome === 'desert' ? 0xe0c898 : jitterColor(0xeee4cc, rng, 0.04);
+      const beam = 0x5a3a22;
+      const sn = Math.sin(s.rot), cs = Math.cos(s.rot);
+      S.add(ENV.box(5, 3, 4), wallC, s.x, base + 1.5, s.z, 0, s.rot);
+      S.add(ENV.box(5.3, 0.5, 4.3), 0x7a7066, s.x, base + 0.2, s.z, 0, s.rot);
+      for (const o of [-2.45, 2.45]) S.add(ENV.box(0.22, 3, 0.22), beam, s.x + cs * o + sn * 2.02, base + 1.5, s.z - sn * o + cs * 2.02);
+      S.add(ENV.box(5.05, 0.2, 0.2), beam, s.x + sn * 2.03, base + 2.2, s.z + cs * 2.03, 0, s.rot);
+      S.add(ENV.box(0.2, 0.2, 2.9), beam, s.x + sn * 2.04, base + 1.4, s.z + cs * 2.04, 0.9, s.rot + Math.PI / 2);
+      S.add(prismRoof(6, 5.2, 2.2), map.biome === 'winter' ? 0xf2f6f9 : roofs[s.roof ?? 0], s.x, base + 3, s.z, 0, s.rot);
+      S.add(ENV.box(0.95, 1.7, 0.2), beam, s.x + sn * 2.06, base + 0.85, s.z + cs * 2.06, 0, s.rot);
+      for (const o of [-1.5, 1.5]) S.add(ENV.box(0.7, 0.6, 0.1), 0x8fb8d8, s.x + cs * o + sn * 2.06, base + 2.0, s.z - sn * o + cs * 2.06, 0, s.rot);
+      S.add(ENV.box(0.5, 1.6, 0.5), 0x8a8078, s.x - cs * 1.5, base + 4.6, s.z + sn * 1.5);
     } else if (s.kind === 'well') {
       S.add(ENV.cyl(1.1, 1.2, 1, 8), stone, s.x, base + 0.5, s.z);
       S.add(ENV.cyl(0.8, 0.8, 0.1, 8), 0x3d6f9a, s.x, base + 0.95, s.z);
@@ -219,6 +245,45 @@ export function buildWorld(map, scene) {
       S.add(ENV.box(0.15, 2.2, 0.15), 0x6b4a30, s.x + 1, base + 1.6, s.z);
       S.add(ENV.cone(1.7, 1, 4), 0x9a4a32, s.x, base + 3, s.z, 0, Math.PI / 4);
     }
+  }
+
+  // ---------- Hecken, Mauern, Felsnadeln, Marktstände ----------
+  for (const s2 of map.structures) {
+    if (s2.kind === 'hedge') {
+      const n = Math.ceil(s2.len / 1.2);
+      for (let i = 0; i <= n; i++) {
+        const t = i / n - 0.5;
+        const x = s2.x + Math.cos(s2.rot) * t * s2.len, z = s2.z + Math.sin(s2.rot) * t * s2.len;
+        const h = map.terrainHeight(x, z);
+        if (s2.style === 'hedge') {
+          S.add(ENV.ico(0.85 + rng() * 0.25, 0), jitterColor(B.leaf[(rng() * B.leaf.length) | 0], rng, 0.1).multiplyScalar(0.8), x, h + 0.75, z, rng() * 3, rng() * 3, 0, 1, 1.05, 1);
+        } else if (s2.style === 'wall') {
+          S.add(ENV.box(1.3, 1.0, 0.7), jitterColor(stone, rng, 0.07), x, h + 0.45, z, 0, -s2.rot);
+          S.add(ENV.box(1.25, 0.18, 0.85), stoneDark, x, h + 1.0, z, 0, -s2.rot);
+        } else {
+          const hh = 0.6 + rng() * 2.2;
+          if (rng() < 0.8) S.add(ENV.box(1.25, hh, 0.8), jitterColor(stoneDark, rng, 0.08), x, h + hh / 2 - 0.1, z, 0, -s2.rot);
+          else S.add(ENV.dode(0.5), stoneDark, x, h + 0.2, z, rng() * 3);
+        }
+      }
+    } else if (s2.kind === 'spire') {
+      const h = map.terrainHeight(s2.x, s2.z);
+      const rc = jitterColor(B.cliff[0], rng, 0.06);
+      S.add(ENV.cyl(s2.r * 0.35, s2.r, s2.h, 6), rc, s2.x, h + s2.h / 2 - 0.3, s2.z, (rng() - 0.5) * 0.1, rng() * 3, (rng() - 0.5) * 0.1);
+      S.add(ENV.cyl(s2.r * 0.25, s2.r * 0.4, s2.h * 0.25, 5), rc.clone().multiplyScalar(1.08), s2.x, h + s2.h + s2.h * 0.1, s2.z, 0, rng() * 3);
+      for (let i = 0; i < 4; i++) { const a = rng() * 6.28; S.add(ENV.dode(0.4 + rng() * 0.5), rc.clone().multiplyScalar(0.9), s2.x + Math.cos(a) * (s2.r + 0.6), h + 0.2, s2.z + Math.sin(a) * (s2.r + 0.6), rng() * 3); }
+    }
+  }
+  for (const st of map.decor.stalls || []) {
+    const h = map.terrainHeight(st.x, st.z);
+    const cols = [0xc4302b, 0x2f63c4, 0xe3b441, 0x4f8f3a];
+    S.add(ENV.box(2.2, 0.9, 1.2), 0x7b5a3a, st.x, h + 0.45, st.z, 0, st.rot);
+    for (const [ox, oz] of [[-1, -0.55], [1, -0.55], [-1, 0.55], [1, 0.55]]) {
+      const x = st.x + Math.cos(st.rot) * ox + Math.sin(st.rot) * oz, z = st.z - Math.sin(st.rot) * ox + Math.cos(st.rot) * oz;
+      S.add(ENV.box(0.1, 2.2, 0.1), 0x5a3a22, x, h + 1.1, z);
+    }
+    S.add(ENV.box(2.6, 0.1, 1.6), cols[st.col], st.x, h + 2.25, st.z, 0.12, st.rot);
+    for (let i = 0; i < 4; i++) S.add(ENV.ico(0.16, 0), [0xe8a04c, 0xc4302b, 0x7fbf4a, 0xf2e14c][i], st.x - 0.7 + i * 0.45, h + 1.0, st.z, 0, st.rot);
   }
 
   // ---------- Brücken ----------
@@ -546,17 +611,19 @@ export function buildWorld(map, scene) {
   const W = { summer: { n: 70, col: 0xfff2a0, size: 0.1, fall: -0.15, drift: 0.6, flutter: 1.2 },
     autumn: { n: 160, col: 0xd9772a, size: 0.22, fall: 1.1, drift: 1.4, flutter: 2.5, leaf: true },
     winter: { n: 420, col: 0xffffff, size: 0.13, fall: 2.2, drift: 0.6, flutter: 0.8 },
-    desert: { n: 180, col: 0xe8cf9a, size: 0.12, fall: 0.1, drift: 5, flutter: 0.4 } }[map.biome];
+    desert: { n: 180, col: 0xe8cf9a, size: 0.12, fall: 0.1, drift: 5, flutter: 0.4 },
+    spring: { n: 140, col: 0xf7c9dc, size: 0.18, fall: 0.7, drift: 1.2, flutter: 2.2, leaf: true, petals: true },
+    highland: { n: 380, col: 0xc8d6e2, size: 0.05, fall: 16, drift: 2, flutter: 0.2, rain: true } }[map.biome];
   if (W) {
-    const geo = W.leaf ? new THREE.PlaneGeometry(W.size * 2, W.size * 1.3) : new THREE.IcosahedronGeometry(W.size, 0);
-    const mat = new THREE.MeshBasicMaterial({ color: W.col, side: THREE.DoubleSide, transparent: map.biome === 'desert', opacity: 0.6 });
+    const geo = W.rain ? new THREE.BoxGeometry(0.03, 1.1, 0.03) : W.leaf ? new THREE.PlaneGeometry(W.size * 2, W.size * 1.3) : new THREE.IcosahedronGeometry(W.size, 0);
+    const mat = new THREE.MeshBasicMaterial({ color: W.col, side: THREE.DoubleSide, transparent: map.biome === 'desert' || W.rain, opacity: W.rain ? 0.45 : 0.6 });
     const mesh = new THREE.InstancedMesh(geo, mat, W.n);
     mesh.frustumCulled = false;
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     const parts = [];
     for (let i = 0; i < W.n; i++) parts.push({ x: (rng() - 0.5) * 90, y: rng() * 40, z: (rng() - 0.5) * 70, p: rng() * 6, s: 0.7 + rng() * 0.6 });
     if (W.leaf) {
-      const leafCols = B.leaf.map((c) => new THREE.Color(c));
+      const leafCols = (W.petals ? [0xf7c9dc, 0xf2a6c8, 0xffffff] : B.leaf).map((c) => new THREE.Color(c));
       for (let i = 0; i < W.n; i++) mesh.setColorAt(i, leafCols[i % leafCols.length]);
     }
     group.add(mesh);
@@ -608,7 +675,7 @@ export function animateWorld(world, t, dt, map) {
       let rx = ((q.x - cx) % 90 + 135) % 90 - 45, rz = ((q.z - cz) % 70 + 105) % 70 - 35;
       const x = cx + rx, z = cz + rz;
       const gy = map.terrainHeight(x, z);
-      _wq.setFromEuler(_we.set(t * 1.5 + q.p, q.p, t * W.flutter + q.p));
+      if (W.rain) _wq.setFromEuler(_we.set(0, 0, 0.15)); else _wq.setFromEuler(_we.set(t * 1.5 + q.p, q.p, t * W.flutter + q.p));
       _wm.compose(_wp.set(x, gy + q.y * 0.9 + 0.3, z), _wq, _ws.set(q.s, q.s, q.s));
       mesh.setMatrixAt(i, _wm);
     }

@@ -40,6 +40,7 @@ const G = {
   mode: null,
   tab: 'move',
   slotSel: 0,
+  sel: [],
   last: null,
 };
 
@@ -73,6 +74,7 @@ function createBattle(opts) {
   botOrders(bot, opts.scenario, map, opts.diff, rng);
   if (opts.demo) botOrders(player, opts.scenario, map, 'normal', rng);
   const battle = new Battle(map, all, SCENARIOS[opts.scenario]);
+  battle.soldiersInStep = false;
   const brain = new BotBrain(battle, opts.diff, rng);
   const units = new UnitRenderer(stage.scene, all, map, stage.quality.shadows);
   const overlays = new Overlays(stage.scene, map);
@@ -139,7 +141,7 @@ function updateLabels(B) {
     if (lb.lastC !== L.count) { lb.c.textContent = L.count; lb.hp.style.width = (L.ratio * 100).toFixed(0) + '%'; lb.lastC = L.count; }
     const st = G.phase === 'battle' ? (STATE_GLYPH[L.state] || '') : '';
     if (lb.lastS !== st) { lb.s.textContent = st; lb.lastS = st; }
-    const sel = G.selected === L;
+    const sel = isSel(L) && L.side === 0 || G.selected === L;
     const tgt = G.selected && G.selected.side === 0 && G.selected.orders.target === 'legion' && G.selected.orders.targetId === L.id;
     lb.el.classList.toggle('sel', sel);
     lb.el.classList.toggle('tgt', !!tgt);
@@ -167,6 +169,7 @@ function showScreen(id) {
 
 function showMenu() {
   G.phase = 'menu';
+  G.sel = [];
   G.paused = false;
   $('#hud').classList.add('hidden');
   showScreen('scr-menu');
@@ -257,6 +260,7 @@ function startDeploy(cfg) {
 }
 
 function enterDeploy(opts) {
+  G.sel = [];
   const B = createBattle(opts);
   G.phase = 'deploy';
   G.paused = false;
@@ -293,7 +297,9 @@ function enterBattle() {
   hint('');
   closeOrders();
   G.selected = null;
+  G.sel = [];
   banner('ZUM ANGRIFF!');
+  setTimeout(() => { if (G.phase === 'battle' && !G.sel.length) hint('Legion antippen → Boden = marschieren · Feind = angreifen · lang drücken & ziehen = Rahmen / Ausrichtung'); }, 2400);
   sound.play('drum');
   setTimeout(() => sound.play('drum'), 350);
 }
@@ -341,7 +347,11 @@ function renderActions() {
       a.innerHTML = `<button class="btn" data-a="to-deploy">◀ Aufstellung</button><button class="btn primary" data-a="fight">⚔ Schlacht beginnen</button>`;
       break;
     case 'battle':
-      a.innerHTML = G.selected && G.selected.side === 0 && G.selected.alive && !$('#orders').classList.contains('show') ? `<button class="btn" data-a="open-orders">Befehle</button>` : '';
+      if (G.sel.length) {
+        a.innerHTML = `<button class="btn" data-a="cmd-halt">✋ Halt</button><button class="btn" data-a="cmd-retreat">↩ Rückzug</button>`
+          + (!$('#orders').classList.contains('show') ? `<button class="btn" data-a="open-orders">☰ Befehle</button>` : '')
+          + `<button class="btn icon" data-a="cmd-clear" aria-label="Auswahl aufheben">✕</button>`;
+      } else a.innerHTML = `<button class="btn" data-a="sel-all">▣ Alle wählen</button>`;
       break;
     default: a.innerHTML = '';
   }
@@ -385,6 +395,10 @@ $('#actions').addEventListener('click', (e) => {
     case 'wp-done': finishWaypoints(); break;
     case 'mode-cancel': G.mode = null; hint(''); if (G.selected) { if (G.selected.orders.target === 'legion' && G.selected.orders.targetId < 0) G.selected.orders.target = 'nearest'; openOrders(G.selected); } renderActions(); break;
     case 'open-orders': if (G.selected) openOrders(G.selected); break;
+    case 'cmd-halt': B.battle.commandHalt(G.sel); toast('Halt! Stellung halten'); refreshRoutes(); break;
+    case 'cmd-retreat': B.battle.commandRetreat(G.sel); toast('Rückzug!'); refreshRoutes(); break;
+    case 'cmd-clear': setSel([]); break;
+    case 'sel-all': setSel(B.player.filter((l) => l.alive)); break;
   }
 });
 
@@ -401,7 +415,7 @@ function updateRoster() {
   B.player.forEach((L, i) => {
     const r = G.rosterEls[i];
     if (!r) return;
-    r.el.classList.toggle('sel', G.selected === L);
+    r.el.classList.toggle('sel', isSel(L));
     r.el.classList.toggle('dead', !L.alive);
     r.cnt.textContent = `${L.count}/${L.maxCount}`;
     r.hp.style.width = (L.ratio * 100).toFixed(0) + '%';
@@ -415,15 +429,55 @@ $('#roster').addEventListener('click', (e) => {
   if (!c) return;
   const L = G.cur.player[+c.dataset.l];
   if (!L.alive) return;
+  if (G.rosterLong) { G.rosterLong = false; return; }
   sound.play('select');
   if (G.selected === L) stage.focus(L.x, L.z, Math.min(stage.cam.tdist, 60));
   select(L, true);
 });
+$('#roster').addEventListener('pointerdown', (e) => {
+  const c = e.target.closest('[data-l]');
+  if (!c || G.phase !== 'battle') return;
+  clearTimeout(G.rosterT);
+  G.rosterT = setTimeout(() => {
+    const L = G.cur.player[+c.dataset.l];
+    if (!L || !L.alive) return;
+    G.rosterLong = true;
+    setSel(G.sel.includes(L) ? G.sel.filter((x) => x !== L) : [...G.sel, L]);
+    if (navigator.vibrate) navigator.vibrate(12);
+    sound.play('select');
+  }, 420);
+});
+for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) $('#roster').addEventListener(ev, () => clearTimeout(G.rosterT));
 
 // =====================================================================
 // Auswahl & Befehlspanel
 // =====================================================================
+// Mehrfachauswahl eigener Legionen in der Schlacht (RTS-Steuerung)
+function setSel(list, focus = false) {
+  G.sel = list.filter((l) => l && l.alive && l.side === 0);
+  G.selected = G.sel[0] || null;
+  if (!G.sel.length || ($('#orders').classList.contains('show') && !G.sel.includes(G.selected))) closeOrders();
+  if ($('#orders').classList.contains('show') && G.selected) openOrders(G.selected);
+  if (focus && G.selected) stage.focus(G.selected.x, G.selected.z);
+  if (G.sel.length) hint(G.sel.length === 1 ? `${legionTitle(G.selected)} · Boden tippen = marschieren · Feind tippen = angreifen` : `${G.sel.length} Legionen gewählt · Boden tippen = in Formation marschieren`);
+  else hint('');
+  updateRoster();
+  renderActions();
+  refreshRoutes();
+}
+const isSel = (L) => G.sel.includes(L) || G.selected === L;
+
+function issueMove(x, z, face = null) {
+  const B = G.cur;
+  const plan = B.battle.commandMove(G.sel, x, z, face);
+  B.overlays.pingMove(x, z, plan);
+  sound.play('place');
+  sound.play('select', 0.6);
+  refreshRoutes();
+}
+
 function select(L, fromUi = false) {
+  if (G.phase === 'battle' && L && L.side === 0) { setSel([L], fromUi); return; }
   G.selected = L;
   if (L && L.side === 0 && (G.phase === 'orders' || G.phase === 'battle')) openOrders(L);
   else closeOrders();
@@ -533,7 +587,7 @@ $('#tab-body').addEventListener('click', (e) => {
     closeOrders();
   } else if (G.mode) { G.mode = null; hint(''); }
   if (k === 'formation') L.formDirty = true;
-  if (G.phase === 'battle' && G.mode !== 'waypoints') G.cur.battle.applyOrders(L);
+  if (G.phase === 'battle' && G.mode !== 'waypoints') { G.cur.battle.clearCommand(L); G.cur.battle.applyOrders(L); }
   renderTab(L);
   renderActions();
   refreshRoutes();
@@ -575,10 +629,10 @@ function refreshRoutes() {
   const ov = B.overlays;
   ov.clearRoutes();
   if (G.phase !== 'orders' && !(G.phase === 'battle' && G.selected)) return;
-  const list = G.phase === 'orders' ? B.player : [G.selected];
+  const list = G.phase === 'orders' ? B.player : (G.sel.length ? G.sel : [G.selected]);
   for (const L of list) {
     if (!L.alive || L.side !== 0) continue;
-    const sel = L === G.selected;
+    const sel = isSel(L);
     if (G.phase === 'orders') {
       const { pts, target } = B.battle.previewRoute(L);
       if (pts.length > 1) ov.addRoute(pts, sel ? 0xffd36a : 0x6aa2ff, !sel, sel ? 0.8 : 0.55);
@@ -624,6 +678,7 @@ function legionAt(x, y, extra = 0) {
 
 function onPointerDown(e, hintL = null) {
   sound.unlock();
+  stage.stopFling();
   if (G.phase === 'menu' || G.phase === 'setup' || G.phase === 'result' || G.phase === 'loading') return;
   ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (ptrs.size === 1) {
@@ -641,7 +696,17 @@ function onPointerDown(e, hintL = null) {
       else if (inside && !L) L = S;
     }
     if (!L) L = legionAt(e.clientX, e.clientY, G.phase === 'deploy' ? 1.5 : 0);
-    gest = { type: 'tap', sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, t: performance.now(), legion: L, button: e.button, turn, g0 };
+    clearTimeout(G.lpT);
+    if (G.phase === 'battle' && !(L && L.side === 0)) {
+      // lang drücken: ohne Auswahl = Auswahlrahmen, mit Auswahl = Marsch mit Blickrichtung ziehen
+      G.lpT = setTimeout(() => {
+        if (!gest || gest.type !== 'tap') return;
+        if (navigator.vibrate) navigator.vibrate(12);
+        if (G.sel.length) { gest.type = 'facing'; gest.fp = pickGround(gest.sx, gest.sy); hint('Ziehen = Blickrichtung am Ziel festlegen'); }
+        else { gest.type = 'box'; const b = $('#selbox'); b.style.display = 'block'; updateBox(gest.sx, gest.sy); }
+      }, 330);
+    }
+    gest = { type: 'tap', vx: 0, vy: 0, sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, t: performance.now(), legion: L, button: e.button, turn, g0 };
   } else if (ptrs.size === 2) {
     const [a, b] = [...ptrs.values()];
     gest = { type: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y), ang: Math.atan2(b.y - a.y, b.x - a.x), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
@@ -670,7 +735,10 @@ window.addEventListener('pointermove', (e) => {
   const dx = e.clientX - gest.lx, dy = e.clientY - gest.ly;
   gest.lx = e.clientX; gest.ly = e.clientY;
   const moved = Math.hypot(e.clientX - gest.sx, e.clientY - gest.sy);
+  if (gest.type === 'box') { updateBox(e.clientX, e.clientY); return; }
+  if (gest.type === 'facing') { facingPreview(e.clientX, e.clientY); return; }
   if (gest.type === 'tap' && moved > 9) {
+    clearTimeout(G.lpT);
     const L = gest.legion;
     if (G.phase === 'deploy' && L && L.side === 0 && gest.button !== 2) {
       gest.type = gest.turn ? 'turn' : 'drag';
@@ -679,7 +747,12 @@ window.addEventListener('pointermove', (e) => {
       if (G.selected !== L) select(L);
     } else gest.type = gest.button === 2 ? 'rotate' : 'pan';
   }
-  if (gest.type === 'pan') stage.pan(dx, dy);
+  if (gest.type === 'pan') {
+    stage.pan(dx, dy);
+    const now = performance.now(), el = Math.max(8, now - (gest.lt || now - 16));
+    gest.lt = now;
+    gest.vx = gest.vx * 0.5 + (dx / el * 1000) * 0.5; gest.vy = gest.vy * 0.5 + (dy / el * 1000) * 0.5;
+  }
   else if (gest.type === 'rotate') { stage.rotate(-dx * 0.006); stage.tilt(dy * 0.004); }
   else if (gest.type === 'drag') { edgeScroll(e.clientX, e.clientY); dragLegion(gest.legion, e.clientX, e.clientY, gest.off); }
   else if (gest.type === 'turn') turnLegion(gest.legion, e.clientX, e.clientY);
@@ -687,9 +760,13 @@ window.addEventListener('pointermove', (e) => {
 const endPtr = (e) => {
   if (!ptrs.has(e.pointerId)) return;
   ptrs.delete(e.pointerId);
+  clearTimeout(G.lpT);
   if (!gest) return;
+  if (gest.type === 'box') finishBox(e.clientX, e.clientY);
+  if (gest.type === 'facing') finishFacing(e.clientX, e.clientY);
   if (gest.type === 'tap' && ptrs.size === 0 && performance.now() - gest.t < 450) handleTap(e.clientX, e.clientY, gest.legion);
   if (gest.type === 'drag') { settleLegion(gest.legion); sound.play('place'); }
+  if (gest.type === 'pan' && performance.now() - (gest.lt || 0) < 80) stage.fling(gest.vx, gest.vy);
   if (ptrs.size === 0) gest = null;
   else if (gest.type === 'pinch') gest = { type: 'none' };
 };
@@ -708,6 +785,38 @@ window.addEventListener('keydown', (e) => {
   if (k === 'e') stage.rotate(-0.15);
   if (k === ' ' && G.phase === 'battle') togglePause();
 });
+
+// ---------- Auswahlrahmen & Ausrichtungs-Ziehen (Schlacht) ----------
+function updateBox(x, y) {
+  const b = $('#selbox');
+  const x0 = Math.min(gest.sx, x), y0 = Math.min(gest.sy, y);
+  b.style.left = x0 + 'px'; b.style.top = y0 + 'px';
+  b.style.width = Math.abs(x - gest.sx) + 'px'; b.style.height = Math.abs(y - gest.sy) + 'px';
+}
+function finishBox(x, y) {
+  $('#selbox').style.display = 'none';
+  const B = G.cur;
+  const x0 = Math.min(gest.sx, x) - 14, x1 = Math.max(gest.sx, x) + 14, y0 = Math.min(gest.sy, y) - 14, y1 = Math.max(gest.sy, y) + 14;
+  const hits = B.player.filter((L) => {
+    if (!L.alive) return false;
+    stage.project(L.x, B.map.getHeight(L.x, L.z) + 1, L.z, _pp);
+    return _pp.visible && _pp.x >= x0 && _pp.x <= x1 && _pp.y >= y0 && _pp.y <= y1;
+  });
+  setSel(hits);
+  if (hits.length) sound.play('select');
+}
+function facingPreview(x, y) {
+  const p = pickGround(x, y);
+  if (!p || !gest.fp) return;
+  const dx = p.x - gest.fp.x, dz = p.z - gest.fp.z;
+  gest.face = Math.hypot(dx, dz) > 2 ? Math.atan2(dx, dz) : null;
+  G.cur.overlays.showGhosts(G.cur.battle.planMove(G.sel, gest.fp.x, gest.fp.z, gest.face));
+}
+function finishFacing() {
+  G.cur.overlays.clearGhosts();
+  if (gest.fp) issueMove(gest.fp.x, gest.fp.z, gest.face ?? null);
+  setSel(G.sel);
+}
 
 // gültiger Aufstellungsplatz in der eigenen Zone (nächster freier Punkt)
 function validSpot(x, z) {
@@ -790,6 +899,35 @@ function handleTap(x, y, L) {
       if (G.phase === 'battle') B.battle.applyOrders(S);
       openOrders(S); refreshRoutes();
     } else toast('Tippe auf eine feindliche (rote) Legion');
+    return;
+  }
+  if (G.phase === 'battle') {
+    const now = performance.now();
+    if (L && L.side === 0) {
+      if (G.lastTap && G.lastTap.L === L && now - G.lastTap.t < 380) {
+        // Doppeltipp: alle Legionen dieses Typs
+        setSel(B.player.filter((x) => x.alive && x.typeId === L.typeId));
+        toast(`Alle ${L.name} gewählt`);
+      } else if (G.sel.length === 1 && G.sel[0] === L) setSel([]);
+      else setSel([L]);
+      G.lastTap = { L, t: now };
+      sound.play('select');
+      return;
+    }
+    if (L && L.side === 1) {
+      if (G.sel.length) {
+        B.battle.commandAttack(G.sel, L);
+        B.overlays.pingAttack(L);
+        sound.play('clash', 0.7);
+        toast(`Angriff auf ${legionTitle(L)}!`);
+        refreshRoutes();
+      } else toast(`Feind: ${legionTitle(L)} · ${L.count} Mann`);
+      return;
+    }
+    if (G.sel.length) {
+      const p = pickGround(x, y);
+      if (p) issueMove(p.x, p.z);
+    }
     return;
   }
   if (L) { sound.play('select'); select(L); return; }
@@ -908,7 +1046,8 @@ function processEvents(B) {
       case 'rally': if (!demo) feed(`${legionTitle(ev.legion)} hat sich gesammelt`, ev.legion.side); break;
       case 'legionlost':
         if (!demo) feed(`${legionTitle(ev.legion)} wurde vernichtet`, ev.side);
-        if (G.selected === ev.legion) select(null);
+        if (G.phase === 'battle' && G.sel.includes(ev.legion)) setSel(G.sel.filter((l) => l.alive));
+        else if (G.selected === ev.legion) select(null);
         break;
       case 'horn': sound.play('horn', demo ? 0.3 : 1); break;
     }
@@ -984,8 +1123,14 @@ function showHelp() {
   <li><b>Aufstellung:</b> Ziehe deine Legionen innerhalb der blauen Zone an ihre Startposition. „⟳“ dreht die gewählte Legion.</li>
   <li><b>Befehle:</b> Lege für jede Legion Marschroute, Angriff und Rückzug fest. Die Routen werden auf der Karte angezeigt.</li>
   <li><b>Schlacht:</b> Die Legionen führen ihre Befehle aus. Mit ❚❚ pausierst du jederzeit und kannst Befehle ändern.</li></ul>
-  <h4>Steuerung</h4>
-  <ul><li>Ein Finger: Karte verschieben · Tippen: Legion wählen</li><li>Zwei Finger: Zoomen & Drehen · beide Finger hoch/runter: Neigen</li></ul>
+  <h4>Kamera</h4>
+  <ul><li>Ein Finger: Karte verschieben (mit Schwung) · Zwei Finger: Zoomen & Drehen · beide Finger hoch/runter: Neigen</li></ul>
+  <h4>Direkte Steuerung in der Schlacht (wie in Age of Empires)</h4>
+  <ul><li><b>Legion antippen</b> = wählen · <b>Doppeltipp</b> = alle Legionen dieses Typs · <b>▣ Alle wählen</b></li>
+  <li><b>Lang drücken & ziehen</b> auf freiem Feld = Auswahlrahmen</li>
+  <li>Mit Auswahl: <b>Boden antippen</b> = dorthin marschieren (Gruppen in Formation, gleiches Tempo) · <b>Feind antippen</b> = angreifen</li>
+  <li>Mit Auswahl: <b>lang drücken & ziehen</b> = Zielpunkt und Blickrichtung festlegen</li>
+  <li>✋ Halt · ↩ Rückzug · ☰ Befehle (Detailbefehle) · Legionen-Leiste: lang drücken = zur Auswahl hinzufügen</li></ul>
   <h4>Taktik</h4>
   <ul><li><b>Pikeniere</b> brechen Reiterangriffe (×2,6 Schaden gegen Reiter).</li>
   <li><b>Reiterei</b> zerschlägt Bogenschützen und trifft mit Sturmangriff hart – am besten in Flanke oder Rücken.</li>
@@ -1096,7 +1241,7 @@ let simAcc = 0;
 let hudT = 0;
 let routeT = 0;
 let clock = 0;
-const STEP = 1 / 30;
+const STEP = 1 / 60;
 
 function frame(now) {
   requestAnimationFrame(frame);
@@ -1110,14 +1255,16 @@ function frame(now) {
     if (running && !bt.over) {
       simAcc += dt * G.speed;
       let n = 0;
-      while (simAcc >= STEP && n < 10) {
+      while (simAcc >= STEP && n < 12) {
         bt.step(STEP);
         B.brain.update(STEP);
         if (B.brain0) B.brain0.update(STEP);
         simAcc -= STEP;
         n++;
       }
-      if (n >= 10) simAcc = 0;
+      if (n >= 12) simAcc = 0;
+      // Soldaten pro Bildschirm-Frame bewegen (flüssiger als im Simulationstakt)
+      for (const L of B.legions) bt.updateSoldiers(L, dt * G.speed);
       processEvents(B);
     } else if (G.phase === 'deploy' || G.phase === 'orders') {
       for (const L of B.legions) {
@@ -1132,7 +1279,8 @@ function frame(now) {
     if (!G.demo && G.phase === 'battle' && bt.over) finishBattle();
     B.units.fx.simTime = bt.time;
     B.units.fx.battleArrows = bt.arrows;
-    B.units.update(clock, dt, G.selected, null);
+    B.units.update(clock, dt, G.phase === 'battle' ? new Set(G.sel) : G.selected, null);
+    B.overlays.updatePings(dt);
     B.world.camTarget = stage.cam;
     animateWorld(B.world, clock, dt, B.map);
     B.overlays.updateObjective(clock);

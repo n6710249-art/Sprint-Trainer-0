@@ -16,6 +16,9 @@ Taktisches Einzelspieler-Spiel: Führe **1–5 Legionen** der *Löwenlegion* geg
    - *Angriff:* Ziel (nächster, schwächster, stärkster Feind, Fernkämpfer, bestimmte Legion, Missionsziel), Haltung (aggressiv/ausgewogen/defensiv), Ausweichen für Schützen
    - *Rückzug:* ab 25 % / 50 % Stärke oder nie, ins Lager oder zu Verbündeten, danach halten oder erneut angreifen
 4. **Schlacht** – läuft in Echtzeit (1×/2×/3×). Mit ❚❚ pausieren und Befehle jederzeit ändern.
+   Direkte Steuerung wie in Age of Empires: Legion antippen → Boden tippen = marschieren, Feind tippen = angreifen,
+   Doppeltipp = alle des Typs, lang drücken & ziehen = Auswahlrahmen bzw. Zielpunkt mit Blickrichtung.
+   Gruppen marschieren in Formation (Infanterie vorn, Schützen dahinter, Reiter an den Flanken) im gleichen Tempo.
 
 ## Truppen
 | Legion (Löwen / Raben) | Mann | Stärke |
@@ -28,7 +31,9 @@ Taktisches Einzelspieler-Spiel: Führe **1–5 Legionen** der *Löwenlegion* geg
 
 ## Szenarien
 Burg einnehmen · Burg verteidigen · Canyon-Pass · Flussfurt · Königshügel · Nebelwald –
-jeweils zufällig generiert, in Sommer, Herbst, Winter oder Wüste.
+jeweils zufällig generiert, in Sommer, Frühling, Herbst, Winter, Hochland oder Wüste.
+Dazu zufällige Geländemerkmale: Hügelkämme mit Pässen, Tafelberge mit Rampen, Dörfer, Sümpfe, Seen,
+Felsnadeln, Hecken und Steinmauern, Ruinen.
 
 ## Technik & Build
 - Spiel: Three.js + eigene Simulation (`game/src`), gebündelt mit esbuild nach `game/www/game.js`.
