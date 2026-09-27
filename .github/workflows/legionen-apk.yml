@@ -1,0 +1,23 @@
+name: Legionen APK
+
+on:
+  push:
+    paths: ['legionen/**', '.github/workflows/legionen-apk.yml']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Android-Werkzeuge installieren
+        run: sudo apt-get update && sudo apt-get install -y aapt dalvik-exchange zipalign apksigner
+      - name: APK bauen
+        run: ./legionen/build-apk.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Legionen-apk
+          path: legionen/dist/Legionen.apk

@@ -39,7 +39,7 @@ export class BattleMap {
     this.objective = null;
     this.zones = [null, null];
     this.camps = [null, null];
-    this.fogDensity = scenario === 'forest' ? 0.011 : 0.0045;
+    this.fogDensity = scenario === 'forest' ? 0.0068 : 0.0042;
     this.generate();
   }
 

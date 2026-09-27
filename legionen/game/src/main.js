@@ -127,7 +127,7 @@ function createLabels(B) {
 
 const _pp = { x: 0, y: 0, visible: false };
 function updateLabels(B) {
-  const inGame = G.phase === 'deploy' || G.phase === 'orders' || G.phase === 'battle' || G.phase === 'result';
+  const inGame = G.phase === 'deploy' || G.phase === 'orders' || G.phase === 'battle';
   for (const L of B.legions) {
     const lb = B.labels.get(L);
     if (!inGame || !L.alive) { if (lb.el.style.display !== 'none') lb.el.style.display = 'none'; continue; }
@@ -365,7 +365,7 @@ $('#actions').addEventListener('click', (e) => {
       if (G.selected) { G.selected.orders.waypoints = []; refreshRoutes(); }
       break;
     case 'wp-done': finishWaypoints(); break;
-    case 'mode-cancel': G.mode = null; hint(''); renderActions(); break;
+    case 'mode-cancel': G.mode = null; hint(''); if (G.selected) { if (G.selected.orders.target === 'legion' && G.selected.orders.targetId < 0) G.selected.orders.target = 'nearest'; openOrders(G.selected); } renderActions(); break;
     case 'open-orders': if (G.selected) openOrders(G.selected); break;
   }
 });
@@ -508,9 +508,11 @@ $('#tab-body').addEventListener('click', (e) => {
     L.orders.waypoints = [];
     G.mode = 'waypoints';
     hint('Tippe bis zu 4 Wegpunkte auf die Karte');
+    closeOrders();
   } else if (k === 'target' && v === 'legion') {
     G.mode = 'pickTarget';
-    hint('Tippe auf eine feindliche Legion');
+    hint('Tippe auf eine feindliche (rote) Legion');
+    closeOrders();
   } else if (G.mode) { G.mode = null; hint(''); }
   if (k === 'formation') L.formDirty = true;
   if (G.phase === 'battle' && G.mode !== 'waypoints') G.cur.battle.applyOrders(L);
@@ -544,7 +546,7 @@ function finishWaypoints() {
   hint('');
   if (L && !L.orders.waypoints.length) { L.orders.move = 'advance'; toast('Keine Wegpunkte – Legion rückt direkt vor'); }
   if (L && G.phase === 'battle') G.cur.battle.applyOrders(L);
-  if (L) renderTab(L);
+  if (L) openOrders(L);
   renderActions();
   refreshRoutes();
 }
@@ -692,7 +694,7 @@ function handleTap(x, y, L) {
     S.orders.waypoints.push([p.x, p.z]);
     sound.play('place');
     refreshRoutes();
-    renderTab(S);
+    hint(`Wegpunkt ${S.orders.waypoints.length}/4 gesetzt – weitere tippen oder „Route fertig“`);
     if (S.orders.waypoints.length >= 4) finishWaypoints();
     return;
   }
@@ -706,7 +708,7 @@ function handleTap(x, y, L) {
       sound.play('select');
       toast(`Ziel: ${legionTitle(L)}`);
       if (G.phase === 'battle') B.battle.applyOrders(S);
-      renderTab(S); renderActions(); refreshRoutes();
+      openOrders(S); refreshRoutes();
     } else toast('Tippe auf eine feindliche (rote) Legion');
     return;
   }
@@ -852,7 +854,7 @@ function finishBattle() {
     $('#res-reason').textContent = bt.reason;
     const col = (side) => {
       const ls = B.legions.filter((l) => l.side === side);
-      return `<div class="rs-col p${side}"><h4>${FACTIONS[side].name}</h4>${ls.map((l) => `<div class="rs-line"><span>${legionTitle(l)}</span><span>${l.alive ? l.count + '/' + l.maxCount : '✝'} · ${l.kills} Siege</span></div>`).join('')}</div>`;
+      return `<div class="rs-col p${side}"><h4>${FACTIONS[side].name}</h4>${ls.map((l) => `<div class="rs-line"><span>${legionTitle(l)}</span><span>${l.alive ? l.count + '/' + l.maxCount : '✝'} · ⚔ ${l.kills}</span></div>`).join('')}</div>`;
     };
     const mvp = B.player.slice().sort((a, b) => b.kills - a.kills)[0];
     $('#res-stats').innerHTML = col(0) + col(1) + `<div class="rs-sum"><div>Dauer<b>${fmtTime(bt.time)}</b></div><div>Eigene Verluste<b>${bt.lost[0]}</b></div><div>Feindliche Verluste<b>${bt.lost[1]}</b></div><div>Beste Legion<b>${mvp ? ROMAN[mvp.index] + '. ' + mvp.name : '–'}</b></div></div>`;
