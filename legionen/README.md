@@ -7,7 +7,10 @@ Taktisches Einzelspieler-Spiel: Führe **1–5 Legionen** der *Löwenlegion* geg
 
 ## Spielablauf
 1. **Vorbereitung** – Schlachtfeld (oder Zufall), Jahreszeit, Schwierigkeit und bis zu 5 Legionen wählen.
-2. **Aufstellung** – Legionen in der blauen Zone per Finger verschieben, mit ⟳ drehen.
+2. **Aufstellung** – in der blauen Zone:
+   - Legion **ziehen** – oder **antippen und Zielort tippen**
+   - am **gelben Pfeil** ziehen zum Ausrichten, alternativ ⟲ / ⟳ (30°-Schritte)
+   - **▦** wechselt die Formation (Linie/Block/Keil); überlappende Legionen rücken beim Absetzen auseinander
 3. **Befehle** – je Legion:
    - *Bewegung:* Vorrücken, Halten, Flanke links/rechts, eigene Route (bis 4 Wegpunkte), Formation (Linie/Block/Keil), Startsignal (sofort bis +20 s)
    - *Angriff:* Ziel (nächster, schwächster, stärkster Feind, Fernkämpfer, bestimmte Legion, Missionsziel), Haltung (aggressiv/ausgewogen/defensiv), Ausweichen für Schützen
@@ -34,4 +37,5 @@ jeweils zufällig generiert, in Sommer, Herbst, Winter oder Wüste.
 - `./build-apk.sh` baut die APK ohne Android-SDK-Download
   (braucht Node, JDK und die Ubuntu-Pakete `aapt dalvik-exchange zipalign apksigner`).
 - GitHub Actions (`.github/workflows/legionen-apk.yml`) baut die APK bei jedem Push als Artefakt.
-- Headless-Test aller Szenarien: `npx esbuild test/sim.mjs --bundle --platform=node --outfile=/tmp/sim.cjs && node /tmp/sim.cjs 3` (im Ordner `game/`).
+- Headless-Tests (im Ordner `game/`): `test/sim.mjs` (alle Szenarien), `test/stuck.mjs` (Feststecken/Verkeilen), `test/duel.mjs` (Truppenbalance).
+- Beispiel: `npx esbuild test/sim.mjs --bundle --platform=node --outfile=/tmp/sim.cjs && node /tmp/sim.cjs 3` (im Ordner `game/`).

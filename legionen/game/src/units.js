@@ -96,10 +96,12 @@ export class Legion {
     let cols = this.T.cols;
     const f = this.orders.formation;
     if (f === 'line' && this.typeId !== 'cavalry') cols = Math.ceil(cols * 1.25);
-    const maxCols = Math.max(2, Math.floor((clearance * 2) / this.T.spacing));
+    // im Wald lockern die Reihen auf, damit die Männer zwischen den Bäumen Platz haben
+    const sp = this.T.spacing * (this.loose ? 1.35 : 1);
+    const maxCols = Math.max(2, Math.floor((clearance * 2) / sp));
     this.cols = Math.min(cols, maxCols);
     const form = this.cols < cols && f !== 'block' ? 'line' : f;
-    const res = formationSlots(Math.max(1, this.count), this.cols, this.T.spacing, form);
+    const res = formationSlots(Math.max(1, this.count), this.cols, sp, form);
     this.slots = res.slots;
     this.halfW = res.halfW; this.halfD = res.halfD;
     this.formDirty = false;

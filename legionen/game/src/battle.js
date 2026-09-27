@@ -10,6 +10,7 @@ const angDiff = (a, b) => {
   return d;
 };
 const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+const _tp = [0, 0];
 
 export class Battle {
   constructor(map, legions, scenarioDef) {
@@ -219,6 +220,13 @@ export class Battle {
     if (attacker && !L.isRanged) { L.melee = attacker; L.state = 'melee'; return; }
     if (attacker && L.isRanged && dist(L, attacker) < this.contactDist(L, attacker) + 0.5) { L.melee = attacker; L.state = 'melee'; return; }
 
+    // Vor dem Tor stauen? -> mit anpacken statt warten
+    if (m.gate && m.gate.alive && L.side !== m.gate.owner && L.state !== 'breach' && !L.isRanged
+      && Math.hypot(m.gate.x - L.x, m.gate.z - L.z) < L.halfD + 11 && this.wantsInside(L)
+      && this.legions.some((X) => X !== L && X.side === L.side && X.state === 'breach')) {
+      L.state = 'breach';
+      L.path = [];
+    }
     // Tor wird gerade eingeschlagen
     if (L.state === 'breach' && m.gate && m.gate.alive) {
       const threat = this.nearestEnemy(L, 3);
@@ -234,6 +242,7 @@ export class Battle {
     // Wegpunkte (Flanke / eigene Route)
     const aggro = this.aggroRadius(L);
     if (L.wp && L.wpIdx < L.wp.length) {
+      if (this.keepEngaging(L, aggro)) return;
       const threat = this.nearestEnemy(L, aggro);
       if (threat) { this.engage(L, threat); return; }
       const w = L.wp[L.wpIdx];
@@ -243,6 +252,7 @@ export class Battle {
     }
 
     if (o.move === 'hold') {
+      if (this.keepEngaging(L, aggro, true)) return;
       const threat = this.nearestEnemy(L, aggro);
       if (threat && Math.hypot(threat.x - L.holdX, threat.z - L.holdZ) < aggro + 10) { this.engage(L, threat); return; }
       if (Math.hypot(L.holdX - L.x, L.holdZ - L.z) > 2.5) this.moveTo(L, L.holdX, L.holdZ, 'move');
@@ -252,6 +262,7 @@ export class Battle {
 
     const ob = m.objective;
     if (o.target === 'objective' && ob) {
+      if (this.keepEngaging(L, Math.min(aggro, 12))) return;
       const threat = this.nearestEnemy(L, Math.min(aggro, 12));
       if (threat) { this.engage(L, threat); return; }
       const d = Math.hypot(ob.x - L.x, ob.z - L.z);
@@ -314,6 +325,27 @@ export class Battle {
       const keep = R * 0.82;
       this.moveTo(L, L.x + dx / d * (d - keep + 1), L.z + dz / d * (d - keep + 1), 'move');
     } else { L.state = 'idle'; L.path = []; }
+  }
+
+  // Hysterese: laufenden Angriff nicht bei jeder kleinen Distanzänderung abbrechen
+  keepEngaging(L, radius, fromHold = false) {
+    const t = L.target;
+    if (L.state !== 'engage' || !t || !t.alive || t.state === 'retreat') return false;
+    const d = dist(L, t) - t.support((L.x - t.x) / (dist(L, t) || 1), (L.z - t.z) / (dist(L, t) || 1));
+    if (d > radius + 8) return false;
+    if (fromHold && Math.hypot(t.x - L.holdX, t.z - L.holdZ) > radius + 18) return false;
+    this.engage(L, t);
+    return true;
+  }
+
+  // will die Legion in die Burg (Ziel oder Feind innerhalb)?
+  wantsInside(L) {
+    const m = this.map;
+    if (!m.castle) return false;
+    if (L.orders.target === 'objective') return true;
+    const t = L.target;
+    if (t && t.alive && m.inCastle(t.x, t.z)) return true;
+    return !!(L.pathGoal && m.inCastle(L.pathGoal[0], L.pathGoal[1]));
   }
 
   engage(L, t) {
@@ -479,6 +511,7 @@ export class Battle {
         faceTo = { x: g.x, z: g.z };
         const d = Math.hypot(g.x - L.x, g.z - L.z);
         if (d > L.halfD + 4) this.stepToward(L, g.x, g.z, 1.4, dt);
+        if (d > L.halfD + 12) { L.state = 'idle'; break; }
         let dps = L.count * T.atk * 0.09 * (L.typeId === 'guard' ? 1.3 : L.typeId === 'cavalry' ? 0.5 : L.typeId === 'archer' ? 0.3 : 1);
         g.hp -= dps * dt;
         g.shake = 0.25;
@@ -518,6 +551,8 @@ export class Battle {
       const moving = L.state === 'move' || L.state === 'engage' || L.state === 'retreat' || L.state === 'kite';
       const want = moving ? cl + 1 : 99;
       const colsBefore = L.cols;
+      const loose = !!(this.map.flagAt(L.x, L.z) & 1) || this.map.treesNear(L.x, L.z, Math.max(L.halfW, L.halfD)) > 2;
+      if (loose !== !!L.loose) { L.loose = loose; L.formDirty = true; }
       if (L.formDirty || want !== L.lastClear) {
         L.lastClear = want;
         L.layout(want);
@@ -548,7 +583,8 @@ export class Battle {
     const p = L.path[0];
     let dx = p[0] - L.x, dz = p[1] - L.z;
     const d = Math.hypot(dx, dz);
-    if (d < 0.9) { L.path.shift(); return L.path.length === 0; }
+    const tol = L.path.length === 1 ? (L.state === 'retreat' ? 3.5 : 1.8) : 0.9;
+    if (d < tol) { L.path.shift(); return L.path.length === 0; }
     dx /= d; dz /= d;
     // Geländefaktor
     const f = m.flagAt(L.x, L.z);
@@ -573,10 +609,21 @@ export class Battle {
         return false;
       }
     }
-    if (m.isPassable(nx, nz, L.side)) { L.x = nx; L.z = nz; }
-    else if (m.isPassable(nx, L.z, L.side)) L.x = nx;
-    else if (m.isPassable(L.x, nz, L.side)) L.z = nz;
-    else { L.path = []; L.repathT = 0; }
+    if (m.isPassable(nx, nz, L.side)) { L.x = nx; L.z = nz; L.blockT = 0; }
+    else {
+      if (m.isPassable(nx, L.z, L.side)) L.x = nx;
+      else if (m.isPassable(L.x, nz, L.side)) L.z = nz;
+      // an einer Kante hängen geblieben -> sofort neu planen (über die eigene Zellmitte)
+      L.blockT = (L.blockT || 0) + dt;
+      if (L.blockT > 0.35) {
+        L.blockT = 0;
+        const goal = L.state === 'retreat' && L.retreatGoal ? L.retreatGoal : L.path[L.path.length - 1];
+        const np = this.pf.find(L.x, L.z, goal[0], goal[1], L.side, L.halfW * 2);
+        const k = this.pf.nearestFree(m.cellIndex(L.x, L.z), L.side);
+        if (k >= 0) np.unshift(m.cellCenter(k));
+        L.path = np;
+      }
+    }
     this.turnToward(L, Math.atan2(dx, dz), dt);
     return false;
   }
@@ -704,18 +751,36 @@ export class Battle {
   separate(dt) {
     const Ls = this.legions.filter((l) => l.alive);
     const m = this.map;
+    const moving = (L) => L.state === 'move' || L.state === 'engage' || L.state === 'kite' || L.state === 'breach';
     for (let i = 0; i < Ls.length; i++) {
       for (let j = i + 1; j < Ls.length; j++) {
         const A = Ls[i], B = Ls[j];
         if (A.melee === B || B.melee === A) continue;
+        // Fliehende laufen durch alles hindurch – niemand blockiert einen Rückzug
+        if (A.state === 'retreat' || B.state === 'retreat') continue;
         const d = dist(A, B) || 0.01;
-        const need = this.contactDist(A, B) * (A.side === B.side ? 0.78 : 0.95);
+        const cd = this.contactDist(A, B);
+        let need, strength;
+        if (A.side === B.side) {
+          // Verbündete: Durchmarsch erlauben, nur stehende Legionen halten Abstand
+          const am = moving(A), bm = moving(B);
+          if (am && bm) { need = cd * 0.45; strength = 1.2; }
+          else if (am || bm) { need = cd * 0.35; strength = 0.8; }
+          else { need = cd * 0.78; strength = 4; }
+        } else {
+          // Feinde, die sich berühren, kämpfen – statt sich gegenseitig wegzuschieben
+          if (d < cd * 0.98) {
+            if (!A.melee && !A.isRanged) { this.startMelee(A, B); continue; }
+            if (!B.melee && !B.isRanged) { this.startMelee(B, A); continue; }
+          }
+          need = cd * 0.95; strength = 4;
+        }
         if (d < need) {
-          const push = Math.min(need - d, 4 * dt);
+          const push = Math.min(need - d, strength * dt);
           const dx = (B.x - A.x) / d, dz = (B.z - A.z) / d;
-          const aFix = A.melee || A.state === 'hold' || A.state === 'shoot';
-          const bFix = B.melee || B.state === 'hold' || B.state === 'shoot';
-          let wa = aFix && !bFix ? 0.15 : 0.5, wb = bFix && !aFix ? 0.15 : 0.5;
+          const aFix = A.melee || A.state === 'hold' || A.state === 'shoot' || A.state === 'breach';
+          const bFix = B.melee || B.state === 'hold' || B.state === 'shoot' || B.state === 'breach';
+          const wa = aFix && !bFix ? 0.15 : bFix && !aFix ? 0.85 : 0.5, wb = 1 - wa;
           const ax = A.x - dx * push * wa * 2, az = A.z - dz * push * wa * 2;
           const bx = B.x + dx * push * wb * 2, bz = B.z + dz * push * wb * 2;
           if (m.isPassable(ax, az, A.side)) { A.x = ax; A.z = az; }
@@ -759,6 +824,9 @@ export class Battle {
         }
         if (!ok) { tx = L.x; tz = L.z; }
       }
+      // Baumstämmen ausweichen (Ziel und aktuelle Position)
+      if (m.avoidTrees(tx, tz, _tp, L.typeId === 'cavalry' ? 0.45 : 0)) { tx = _tp[0]; tz = _tp[1]; }
+      if (m.avoidTrees(s.x, s.z, _tp, 0.5)) { s.x = _tp[0]; s.z = _tp[1]; }
       const dx = tx - s.x, dz = tz - s.z, d = Math.hypot(dx, dz);
       const step = Math.min(d, (maxSp + d * 1.2) * dt);
       if (d > 0.02) {

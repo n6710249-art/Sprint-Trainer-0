@@ -17,7 +17,7 @@ for (const sc of SCENARIO_ORDER) {
     const rng = mulberry32(seed);
     const pTypes = ['legion', 'archer', 'cavalry', 'pike', 'guard'].slice(0, 2 + (r % 4));
     const player = pTypes.map((t, i) => Object.assign(new Legion(0, t, 0, 0, 1), { index: i }));
-    const bTypes = botArmy(pTypes, sc, rng);
+    const bTypes = process.env.SAME ? pTypes.slice() : botArmy(pTypes, sc, rng);
     const sm = botSizeMult(pTypes, bTypes, 1);
     const bot = bTypes.map((t, i) => Object.assign(new Legion(1, t, 0, 0, sm), { index: i }));
     autoDeploy(player, map.zones[0], 0, map, rng);

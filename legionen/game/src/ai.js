@@ -22,9 +22,10 @@ export function botArmy(playerTypes, scenario, rng) {
 }
 
 // Plätze in einer Zone verteilen: Front vorn, Schützen hinten, Reiter an Flanken
-// Größenfaktor, damit der Bot etwa gleich viele Männer stellt wie der Spieler
+// Größenfaktor, damit die Bot-Armee etwa gleich stark ist wie die des Spielers
+// (Mannstärke × Kampfwert pro Mann, z. B. sind Prätorianer pro Mann stärker als Schützen)
 export function botSizeMult(playerTypes, botTypes, diffSize) {
-  const sum = (ts) => ts.reduce((a, t) => a + UNIT_TYPES[t].size, 0);
+  const sum = (ts) => ts.reduce((a, t) => a + UNIT_TYPES[t].size * UNIT_TYPES[t].value, 0);
   return (sum(playerTypes) / Math.max(1, sum(botTypes))) * diffSize;
 }
 

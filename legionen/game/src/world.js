@@ -5,6 +5,8 @@ import { StaticBatch, ENV, jitterColor, prep, xf } from './models.js';
 import { G_GRASS, G_DIRT, G_SAND, G_ROCK, G_BED, G_SNOWCAP, G_FLOOR } from './terrain.js';
 import { mulberry32 } from './rng.js';
 
+const _wm = new THREE.Matrix4(), _wq = new THREE.Quaternion(), _we = new THREE.Euler(), _wp = new THREE.Vector3(), _ws = new THREE.Vector3();
+
 export function buildWorld(map, scene) {
   const B = BIOMES[map.biome];
   const rng = mulberry32(map.seed + 99);
@@ -25,6 +27,9 @@ export function buildWorld(map, scene) {
     const cliff = (B.cliff || B.rock).map((h) => new THREE.Color(h));
     const rock = B.rock.map((h) => new THREE.Color(h));
     const dirt = new THREE.Color(B.dirt), sand = new THREE.Color(B.sand), snow = new THREE.Color(0xf4f7fa);
+    const dryTint = new THREE.Color(B.sand).lerp(new THREE.Color(B.dirt), 0.3);
+    const forestFloor = new THREE.Color(B.leaf[3] || B.leaf[0]).multiplyScalar(0.7).lerp(new THREE.Color(B.dirt), 0.35);
+    const canyonTint = new THREE.Color(B.cliff[0]);
     let p = 0;
     const N = map.noise;
     const setTri = (ax, az, bx, bz, cx, cz, ga, gb, gc) => {
@@ -43,21 +48,34 @@ export function buildWorld(map, scene) {
       const counts = [0, 0, 0, 0, 0, 0, 0];
       counts[ga]++; counts[gb]++; counts[gc]++;
       let g = counts.indexOf(Math.max(...counts));
-      const n1 = N(mx * 0.06, mz * 0.06);
+      const n1 = N(mx * 0.045, mz * 0.045), n2 = N(mx * 0.014 + 7.3, mz * 0.014 - 3.1), n3 = N(mx * 0.21, mz * 0.21);
+      const wl = map.waterLevel;
       if (g === G_SNOWCAP || (my > 22 && map.biome !== 'desert')) c.copy(snow);
       else if (ny < 0.72 || g === G_ROCK) {
-        c.copy(ny < 0.55 ? cliff[(Math.floor(my * 0.7) & 0xffff) % cliff.length] : rock[(Math.abs(Math.floor(n1 * 5))) % rock.length]);
-        if (map.scenario === 'canyon') c.lerp(new THREE.Color(B.cliff[0]), 0.4);
-      } else if (g === G_BED) c.copy(sand).multiplyScalar(0.75);
-      else if (g === G_SAND) c.copy(sand);
-      else if (g === G_DIRT) c.copy(dirt).lerp(grass[0], 0.12);
-      else if (g === G_FLOOR) c.copy(sand).lerp(dirt, 0.4 + n1 * 0.4);
+        // Gesteinsschichten an Felswänden
+        const band = Math.floor(my * 0.85 + n3 * 0.9);
+        c.copy(cliff[((band % cliff.length) + cliff.length) % cliff.length]);
+        if (ny >= 0.55) c.lerp(rock[(Math.abs(Math.floor(n1 * 7))) % rock.length], 0.55);
+        c.multiplyScalar(band % 2 ? 0.93 : 1.05);
+        if (map.scenario === 'canyon') c.lerp(canyonTint, 0.35);
+        if (ny > 0.64 && g !== G_ROCK) c.lerp(grass[1], 0.3); // bewachsene Kanten
+      } else if (g === G_BED) c.copy(sand).multiplyScalar(0.62 + Math.max(0, Math.min(1, (my - wl + 2.2) / 2)) * 0.3);
+      else if (g === G_SAND) c.copy(sand).lerp(grass[0], Math.max(0, n3) * 0.25);
+      else if (g === G_DIRT) c.copy(dirt).lerp(grass[0], 0.1 + Math.max(0, n3) * 0.25);
+      else if (g === G_FLOOR) c.copy(sand).lerp(dirt, 0.35 + n1 * 0.4);
       else {
-        const idx = Math.floor((n1 * 0.5 + 0.5) * grass.length * 1.3) % grass.length;
-        c.copy(grass[Math.max(0, idx)]);
+        // weicher Übergang durch die Graspalette
+        const tt = Math.max(0, Math.min(0.999, n1 * 0.85 + 0.5)) * (grass.length - 1);
+        const i0 = Math.floor(tt);
+        c.copy(grass[i0]).lerp(grass[Math.min(grass.length - 1, i0 + 1)], tt - i0);
+        if (n2 > 0.1) c.lerp(dryTint, Math.min(0.28, (n2 - 0.1) * 0.7)); // trockene Flecken
+        else if (n2 < -0.15) c.multiplyScalar(1 + (n2 + 0.15) * 0.35); // saftige Senken
+        if (map.flagAt(mx, mz) & 1) c.lerp(forestFloor, 0.45); // Waldboden
+        if (map.hasWater && my < wl + 0.5) c.lerp(sand, Math.min(1, (wl + 0.5 - my) * 1.4)); // Uferstreifen
+        c.multiplyScalar(1 + Math.max(-0.05, Math.min(0.08, my / 60)));
         if (my > 14 && map.biome !== 'desert') c.lerp(snow, Math.min(1, (my - 14) / 8));
       }
-      const f = 0.94 + rng() * 0.1;
+      const f = 0.965 + rng() * 0.07;
       c.r *= f; c.g *= f; c.b *= f;
       for (let k = 0; k < 3; k++) { col[p + k * 3] = c.r; col[p + k * 3 + 1] = c.g; col[p + k * 3 + 2] = c.b; }
       p += 9;
@@ -83,10 +101,24 @@ export function buildWorld(map, scene) {
 
   // ---------- Wasser ----------
   if (map.hasWater) {
-    const g = new THREE.PlaneGeometry(230, 170, 46, 34).toNonIndexed();
+    const g = new THREE.PlaneGeometry(230, 170, 70, 52).toNonIndexed();
     g.rotateX(-Math.PI / 2);
-    const mat = new THREE.MeshLambertMaterial({ color: B.water, transparent: true, opacity: 0.82, flatShading: true });
-    if (map.biome === 'winter') mat.color.lerp(new THREE.Color(0xe8f2fa), 0.35);
+    const base = new THREE.Color(B.water);
+    if (map.biome === 'winter') base.lerp(new THREE.Color(0xe8f2fa), 0.35);
+    const shallow = base.clone().lerp(new THREE.Color(0x3fb8b0), 0.4).multiplyScalar(1.05);
+    const deep = base.clone().multiplyScalar(0.62);
+    const pos = g.attributes.position;
+    const cols = new Float32Array(pos.count * 3);
+    const cc = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) {
+      const depth = map.waterLevel - map.terrainHeight(pos.getX(i), pos.getZ(i));
+      const t = Math.max(0, Math.min(1, depth / 2.2));
+      cc.copy(shallow).lerp(deep, t);
+      if (depth < 0.2) cc.lerp(new THREE.Color(0xdff4f4), 0.14); // leichte Schaumkante
+      cols[i * 3] = cc.r; cols[i * 3 + 1] = cc.g; cols[i * 3 + 2] = cc.b;
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    const mat = new THREE.MeshPhongMaterial({ vertexColors: true, transparent: true, opacity: 0.84, flatShading: true, shininess: 80, specular: 0x9ab8c8 });
     const w = new THREE.Mesh(g, mat);
     w.position.y = map.waterLevel;
     w.receiveShadow = true;
@@ -323,6 +355,93 @@ export function buildWorld(map, scene) {
       }
     }
   }
+  // Schilf, Seerosen, Stämme, Pilze
+  const reedCol = new THREE.Color(map.biome === 'winter' ? 0xb8a888 : map.biome === 'autumn' ? 0xa89a52 : 0x6f8f3e);
+  for (const r of map.decor.reeds) {
+    const h = map.terrainHeight(r.x, r.z);
+    for (let i = 0; i < 4; i++) {
+      const ox = (rng() - 0.5) * 0.8, oz = (rng() - 0.5) * 0.8, hh = (1 + rng() * 0.7) * r.s;
+      S.add(ENV.cyl(0.03, 0.05, hh, 3), reedCol, r.x + ox, h + hh / 2, r.z + oz, (rng() - 0.5) * 0.3, 0, (rng() - 0.5) * 0.3);
+      if (i === 0) S.add(ENV.cyl(0.07, 0.07, 0.3, 4), 0x5a3a22, r.x + ox, h + hh + 0.1, r.z + oz);
+    }
+  }
+  for (const l of map.decor.lilies) {
+    S.add(ENV.cyl(0.6 * l.s, 0.6 * l.s, 0.04, 7), jitterColor(0x4f8f3a, rng, 0.08), l.x, map.waterLevel + 0.1, l.z, 0, rng() * 6);
+    if (l.flower) S.add(ENV.ico(0.16, 0), rng() < 0.5 ? 0xf6f0f8 : 0xf28ab8, l.x + 0.2, map.waterLevel + 0.22, l.z);
+  }
+  for (const lg of map.decor.logs) {
+    const h = map.terrainHeight(lg.x, lg.z);
+    S.add(ENV.cyl(0.32, 0.36, lg.len, 6), 0x5e4330, lg.x, h + 0.3, lg.z, 0, lg.rot, Math.PI / 2);
+    S.add(ENV.cyl(0.26, 0.26, 0.05, 6), 0xb89468, lg.x + Math.cos(lg.rot) * lg.len / 2, h + 0.3, lg.z - Math.sin(lg.rot) * lg.len / 2, 0, lg.rot, Math.PI / 2);
+    S.add(ENV.ico(0.35, 0), 0x4f7a3a, lg.x, h + 0.55, lg.z, 0, 0, 0, 1.4, 0.5, 1);
+  }
+  for (const m of map.decor.mushrooms) {
+    const h = map.terrainHeight(m.x, m.z);
+    for (let i = 0; i < 3; i++) {
+      const ox = (rng() - 0.5) * 0.7, oz = (rng() - 0.5) * 0.7, s2 = m.s * (0.6 + rng() * 0.5);
+      S.add(ENV.cyl(0.05 * s2, 0.07 * s2, 0.3 * s2, 5), 0xefe6d2, m.x + ox, h + 0.15 * s2, m.z + oz);
+      S.add(ENV.cone(0.2 * s2, 0.16 * s2, 6), m.red ? 0xc4302b : 0xa8804e, m.x + ox, h + 0.36 * s2, m.z + oz);
+    }
+  }
+  // Felder
+  const fieldCols = map.biome === 'winter' ? [[0xe8eef3, 0xd5dde4], [0xdfe7ee, 0xc9d3dc], [0xe4ebf0, 0xb9a898], [0xf0f4f7, 0xdbe3ea]]
+    : map.biome === 'autumn' ? [[0xd9a93a, 0xc4922e], [0x8a6a3a, 0x6f5230], [0xb8963a, 0xa27f30], [0x9aa04c, 0x86903f]]
+    : [[0xe6c65a, 0xd4b04a], [0x7aa84a, 0x6a963e], [0x8a6a42, 0x74583a], [0xb6c85a, 0x9fb44a]];
+  for (const f of map.decor.fields) {
+    const [ca, cb] = fieldCols[f.kind];
+    const rows = Math.max(4, Math.round(f.d / 1.1));
+    const cs = Math.cos(f.rot), sn = Math.sin(f.rot);
+    for (let i = 0; i < rows; i++) {
+      const o = (i - (rows - 1) / 2) * (f.d / rows);
+      const x = f.x - sn * o, z = f.z + cs * o;
+      const h = map.terrainHeight(x, z);
+      S.add(ENV.box(f.w, 0.35, f.d / rows * 0.82), i % 2 ? ca : cb, x, h + 0.05, z, 0, -f.rot);
+    }
+    for (const sd of [-1, 1]) {
+      for (let i = 0; i <= 4; i++) {
+        const u = (i / 4 - 0.5) * f.w;
+        const x = f.x + cs * u - sn * sd * (f.d / 2 + 0.6), z = f.z + sn * u + cs * sd * (f.d / 2 + 0.6);
+        S.add(ENV.box(0.15, 0.9, 0.15), 0x6b4a30, x, map.terrainHeight(x, z) + 0.4, z);
+      }
+      const x = f.x - sn * sd * (f.d / 2 + 0.6), z = f.z + cs * sd * (f.d / 2 + 0.6);
+      S.add(ENV.box(f.w, 0.08, 0.08), 0x7b5a3a, x, map.terrainHeight(x, z) + 0.65, z, 0, -f.rot);
+    }
+  }
+  for (const fm of map.decor.farms) {
+    const h = map.terrainHeight(fm.x, fm.z);
+    S.add(ENV.box(4.6, 2.6, 3.4), 0xefe4cc, fm.x, h + 1.3, fm.z, 0, -fm.rot);
+    S.add(ENV.cone(3.6, 2.2, 4), 0x9a4a32, fm.x, h + 3.7, fm.z, 0, Math.PI / 4 - fm.rot, 0, 1, 1, 0.8);
+    S.add(ENV.box(0.5, 1.4, 0.5), 0x8a8078, fm.x + 1.2, h + 3.8, fm.z + 0.3);
+    S.add(ENV.box(3.2, 1.6, 2.6), 0x8a5a32, fm.x + Math.cos(fm.rot) * 4.2, h + 0.8, fm.z + Math.sin(fm.rot) * 4.2, 0, -fm.rot);
+    S.add(ENV.cone(2.5, 1.4, 4), 0x6b3a26, fm.x + Math.cos(fm.rot) * 4.2, h + 2.3, fm.z + Math.sin(fm.rot) * 4.2, 0, Math.PI / 4 - fm.rot);
+    for (let i = 0; i < 3; i++) S.add(ENV.cyl(0.5, 0.5, 0.8, 6), 0xd9b85a, fm.x - 3 + i * 1.2, h + 0.4, fm.z - 3, Math.PI / 2, i);
+  }
+  if (map.decor.mill) {
+    const m = map.decor.mill;
+    const h = map.terrainHeight(m.x, m.z);
+    S.add(ENV.cyl(1.4, 2.1, 7, 8), 0xefe4cc, m.x, h + 3.5, m.z);
+    S.add(ENV.cone(2.0, 2.6, 8), 0x9a4a32, m.x, h + 8.3, m.z);
+    S.add(ENV.box(1, 1.8, 0.3), 0x5a3a22, m.x + Math.sin(m.rot) * 2, h + 0.9, m.z + Math.cos(m.rot) * 2, 0, m.rot);
+    const blades = new THREE.Group();
+    const bm = new THREE.MeshLambertMaterial({ color: 0xe8dcc0, flatShading: true });
+    const wood = new THREE.MeshLambertMaterial({ color: 0x6b4a30, flatShading: true });
+    for (let i = 0; i < 4; i++) {
+      const arm = new THREE.Group();
+      const beam = new THREE.Mesh(ENV.box(0.2, 5.2, 0.15), wood); beam.position.y = 2.6;
+      const sail = new THREE.Mesh(ENV.box(1.3, 3.8, 0.06), bm); sail.position.set(0.72, 3.2, 0);
+      arm.add(beam, sail);
+      arm.rotation.z = i * Math.PI / 2;
+      blades.add(arm);
+    }
+    blades.position.set(m.x + Math.sin(m.rot) * 2.1, h + 6.6, m.z + Math.cos(m.rot) * 2.1);
+    blades.rotation.y = m.rot;
+    blades.traverse((o) => { o.castShadow = true; });
+    const spin = new THREE.Group();
+    spin.add(blades);
+    group.add(spin);
+    out.mill = blades;
+  }
+
   // Zelte der Lager
   for (const t of map.decor.tents) {
     const h = map.terrainHeight(t.x, t.z);
@@ -402,6 +521,48 @@ export function buildWorld(map, scene) {
     out.clouds.push(c);
   }
 
+  // ---------- Vogelschwärme ----------
+  const birdMat = new THREE.MeshBasicMaterial({ color: map.biome === 'winter' ? 0x3a3f48 : 0x2a2a30, side: THREE.DoubleSide, fog: true });
+  const wingGeo = new THREE.BufferGeometry();
+  wingGeo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0.3, 0, 0, -0.3, 1.1, 0, 0], 3));
+  out.birds = [];
+  for (let f = 0; f < 2; f++) {
+    const fa = rng() * 6.28;
+    const flock = { cx: Math.cos(fa) * 80, cz: Math.sin(fa) * 58, r: 14 + rng() * 12, y: 16 + rng() * 8, sp: (0.12 + rng() * 0.1) * (rng() < 0.5 ? 1 : -1), ph: rng() * 6, list: [] };
+    for (let i = 0; i < 6; i++) {
+      const b = new THREE.Group();
+      const l = new THREE.Mesh(wingGeo, birdMat), r2 = new THREE.Mesh(wingGeo, birdMat);
+      r2.scale.x = -1;
+      b.add(l, r2);
+      b.scale.setScalar(0.55);
+      b.userData = { l, r: r2, off: [(rng() - 0.5) * 6, (rng() - 0.5) * 2, (rng() - 0.5) * 6], fl: rng() * 6 };
+      group.add(b);
+      flock.list.push(b);
+    }
+    out.birds.push(flock);
+  }
+
+  // ---------- Wetter-Partikel ----------
+  const W = { summer: { n: 70, col: 0xfff2a0, size: 0.1, fall: -0.15, drift: 0.6, flutter: 1.2 },
+    autumn: { n: 160, col: 0xd9772a, size: 0.22, fall: 1.1, drift: 1.4, flutter: 2.5, leaf: true },
+    winter: { n: 420, col: 0xffffff, size: 0.13, fall: 2.2, drift: 0.6, flutter: 0.8 },
+    desert: { n: 180, col: 0xe8cf9a, size: 0.12, fall: 0.1, drift: 5, flutter: 0.4 } }[map.biome];
+  if (W) {
+    const geo = W.leaf ? new THREE.PlaneGeometry(W.size * 2, W.size * 1.3) : new THREE.IcosahedronGeometry(W.size, 0);
+    const mat = new THREE.MeshBasicMaterial({ color: W.col, side: THREE.DoubleSide, transparent: map.biome === 'desert', opacity: 0.6 });
+    const mesh = new THREE.InstancedMesh(geo, mat, W.n);
+    mesh.frustumCulled = false;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    const parts = [];
+    for (let i = 0; i < W.n; i++) parts.push({ x: (rng() - 0.5) * 90, y: rng() * 40, z: (rng() - 0.5) * 70, p: rng() * 6, s: 0.7 + rng() * 0.6 });
+    if (W.leaf) {
+      const leafCols = B.leaf.map((c) => new THREE.Color(c));
+      for (let i = 0; i < W.n; i++) mesh.setColorAt(i, leafCols[i % leafCols.length]);
+    }
+    group.add(mesh);
+    out.weather = { mesh, parts, W };
+  }
+
   scene.add(group);
   return out;
 }
@@ -417,6 +578,41 @@ export function animateWorld(world, t, dt, map) {
     }
     pos.needsUpdate = true;
     world.water.geometry.computeVertexNormals();
+  }
+  if (world.mill) world.mill.rotation.z += dt * 0.8;
+  if (world.birds) {
+    for (const f of world.birds) {
+      f.ph += f.sp * dt;
+      const bx = f.cx + Math.cos(f.ph) * f.r, bz = f.cz + Math.sin(f.ph) * f.r;
+      const yaw = Math.atan2(-Math.sin(f.ph) * f.sp, Math.cos(f.ph) * f.sp);
+      for (const b of f.list) {
+        const u = b.userData;
+        b.position.set(bx + u.off[0], f.y + u.off[1] + Math.sin(t * 0.7 + u.fl) * 0.6, bz + u.off[2]);
+        b.rotation.y = yaw + Math.PI / 2 * Math.sign(f.sp);
+        const flap = Math.sin(t * 9 + u.fl) * 0.6;
+        u.l.rotation.z = flap; u.r.rotation.z = -flap;
+      }
+    }
+  }
+  if (world.weather && world.camTarget) {
+    const { mesh, parts, W } = world.weather;
+    const cx = world.camTarget.x, cz = world.camTarget.z;
+    for (let i = 0; i < parts.length; i++) {
+      const q = parts[i];
+      q.y -= W.fall * q.s * dt;
+      q.x += (W.drift + Math.sin(t * W.flutter + q.p) * W.drift * 0.6) * dt;
+      q.z += Math.cos(t * W.flutter * 0.8 + q.p) * 0.5 * dt;
+      if (q.y < 0) q.y += 40;
+      if (q.y > 40) q.y -= 40;
+      // um die Kamera herum wiederholen
+      let rx = ((q.x - cx) % 90 + 135) % 90 - 45, rz = ((q.z - cz) % 70 + 105) % 70 - 35;
+      const x = cx + rx, z = cz + rz;
+      const gy = map.terrainHeight(x, z);
+      _wq.setFromEuler(_we.set(t * 1.5 + q.p, q.p, t * W.flutter + q.p));
+      _wm.compose(_wp.set(x, gy + q.y * 0.9 + 0.3, z), _wq, _ws.set(q.s, q.s, q.s));
+      mesh.setMatrixAt(i, _wm);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
   }
   for (const c of world.clouds) {
     c.position.x += c.userData.speed * dt;

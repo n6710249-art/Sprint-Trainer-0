@@ -30,7 +30,7 @@ export class BattleMap {
     this.waterLevel = -0.55;
     this.hasWater = false;
     this.structures = [];
-    this.decor = { trees: [], rocks: [], tufts: [], flowers: [], tents: [], menhirs: [], bushes: [], fences: [], ruins: [], torches: [] };
+    this.decor = { trees: [], rocks: [], tufts: [], flowers: [], tents: [], menhirs: [], bushes: [], fences: [], ruins: [], torches: [], reeds: [], lilies: [], logs: [], mushrooms: [], fields: [], farms: [], mill: null };
     this.forests = [];
     this.roads = [];
     this.bridges = [];
@@ -76,6 +76,7 @@ export class BattleMap {
     if (sc === 'hill') {
       this.objective = { type: 'hill', x: r.range(-5, 5), z: r.range(-5, 5), r: 9, score: [0, 0], need: 100 };
     }
+    if (sc === 'hill' || sc === 'forest') this.hasWater = true; // kleine Teiche in Senken
     if (sc === 'castle' || this.castle) {
       this.hasWater = true; // Burggraben
     }
@@ -93,6 +94,7 @@ export class BattleMap {
     this.placeStructures();
     this.buildNav();
     this.placeDecor();
+    this.buildTreeHash();
   }
 
   canyonCenter(x) {
@@ -186,7 +188,7 @@ export class BattleMap {
 
     h += mountain;
     if (edge > 6 && h > 14 && this.biome !== 'desert') g = G_SNOWCAP;
-    else if (edge > 3) g = mountain > 3 ? G_ROCK : g;
+    else if (edge > 3 && mountain > 9) g = G_ROCK; // nur hohe Gipfel felsig, sonst grüne Hügel (steile Hänge färbt der Renderer)
     return [h, g];
   }
 
@@ -540,6 +542,76 @@ export class BattleMap {
       if (r.chance(0.2)) D.flowers.push({ x, z, c: r.int(0, 3) });
       else D.tufts.push({ x, z, s: r.range(0.6, 1.2), rot: r() * 6 });
     }
+    // Blumenwiesen (Büschel statt Einzelblumen)
+    if (biome !== 'desert') {
+      for (let m = 0; m < 9; m++) {
+        const cx = r.range(-70, 70), cz = r.range(-46, 46);
+        const k = this.cellIndex(cx, cz);
+        if (k < 0 || this.blocked[k] || this.flags[k] & (1 | 2 | 16)) continue;
+        const col = r.int(0, 3);
+        for (let i = 0; i < 14; i++) {
+          const a = r() * 6.28, d = Math.sqrt(r()) * 4;
+          D.flowers.push({ x: cx + Math.cos(a) * d, z: cz + Math.sin(a) * d, c: r.chance(0.8) ? col : r.int(0, 3) });
+        }
+      }
+    }
+    // Schilf am Ufer & Seerosen
+    if (this.hasWater) {
+      for (let t = 0; t < 900 && D.reeds.length < 90; t++) {
+        const x = r.range(-100, 100), z = r.range(-70, 70);
+        const h = this.terrainHeight(x, z);
+        if (this.castle && Math.max(Math.abs(x - this.castle.cx), Math.abs(z - this.castle.cz)) < this.castle.half + 2.5) continue;
+        if (h > this.waterLevel - 0.3 && h < this.waterLevel + 0.3) D.reeds.push({ x, z, s: r.range(0.7, 1.2), rot: r() * 6 });
+      }
+      if (biome !== 'winter') {
+        for (let t = 0; t < 900 && D.lilies.length < 40; t++) {
+          const x = r.range(-100, 100), z = r.range(-70, 70);
+          const h = this.terrainHeight(x, z);
+          if (h < this.waterLevel - 0.6 && h > this.waterLevel - 2.4 && !this.bridges.some((b) => Math.hypot(b.x - x, b.z - z) < b.len / 2 + 2)) {
+            D.lilies.push({ x, z, s: r.range(0.5, 0.9), flower: r.chance(0.25) });
+          }
+        }
+      }
+    }
+    // Waldboden: umgestürzte Stämme und Pilze
+    for (const f of this.forests) {
+      const nLogs = r.int(1, 2);
+      for (let i = 0; i < nLogs; i++) {
+        const a = r() * 6.28, d = r() * f.r * 0.8;
+        const x = f.x + Math.cos(a) * d, z = f.z + Math.sin(a) * d;
+        const k = this.cellIndex(x, z);
+        if (k >= 0 && !this.blocked[k]) D.logs.push({ x, z, rot: r() * 6, len: r.range(2.5, 4.5) });
+      }
+      for (let i = 0; i < 6; i++) {
+        const a = r() * 6.28, d = r() * f.r;
+        D.mushrooms.push({ x: f.x + Math.cos(a) * d, z: f.z + Math.sin(a) * d, s: r.range(0.6, 1.1), red: r.chance(0.5) });
+      }
+    }
+    // Felder, Höfe und eine Windmühle im Umland
+    if (biome !== 'desert' || r.chance(0.5)) {
+      const flatAt = (x, z, w) => {
+        let lo = 1e9, hi = -1e9;
+        for (const [ox, oz] of [[-w, -w], [w, -w], [-w, w], [w, w], [0, 0]]) { const h = this.terrainHeight(x + ox, z + oz); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+        return hi - lo < 1.4 && lo > this.waterLevel + 0.3 && hi < 9;
+      };
+      for (let t = 0; t < 400 && D.fields.length < 10; t++) {
+        const x = r.range(-104, 104), z = r.range(-74, 74);
+        if (Math.abs(x) < 81 && Math.abs(z) < 55) continue;
+        const w = r.range(8, 14), d = r.range(6, 10);
+        if (!flatAt(x, z, Math.max(w, d) / 2)) continue;
+        if (D.fields.some((f) => Math.hypot(f.x - x, f.z - z) < 14)) continue;
+        D.fields.push({ x, z, w, d, rot: r.range(-0.5, 0.5), kind: r.int(0, 3) });
+      }
+      for (const f of D.fields.slice(0, 4)) {
+        const x = f.x + Math.cos(f.rot) * (f.w / 2 + 4), z = f.z + Math.sin(f.rot) * (f.w / 2 + 4);
+        if (flatAt(x, z, 2.5)) D.farms.push({ x, z, rot: f.rot });
+      }
+      for (let t = 0; t < 200 && !D.mill; t++) {
+        const x = r.range(-100, 100), z = r.range(-70, 70);
+        if (Math.abs(x) < 82 && Math.abs(z) < 56) continue;
+        if (flatAt(x, z, 2.5) && !D.fields.some((f) => Math.hypot(f.x - x, f.z - z) < 9)) D.mill = { x, z, rot: r() * 6 };
+      }
+    }
     // Zäune an Straßen
     if (this.scenario !== 'canyon') {
       for (let n = 0; n < 3; n++) {
@@ -551,6 +623,57 @@ export class BattleMap {
       }
     }
   }
+  // Räumliches Raster der Baumstämme im Spielfeld (Zellen 4×4)
+  buildTreeHash() {
+    const W = 42, D = 30;
+    this.treeGrid = { W, D, cells: Array.from({ length: W * D }, () => []) };
+    for (const t of this.decor.trees) {
+      if (Math.abs(t.x) > 80 || Math.abs(t.z) > 56) continue;
+      const i = Math.floor((t.x + 84) / 4), j = Math.floor((t.z + 60) / 4);
+      if (i < 0 || j < 0 || i >= W || j >= D) continue;
+      const r = (t.kind === 'pine' ? 1.05 : t.kind === 'palm' || t.kind === 'cactus' ? 0.7 : 0.85) * t.s;
+      this.treeGrid.cells[j * W + i].push({ x: t.x, z: t.z, r });
+    }
+  }
+  // schiebt (x,z) aus Baumstämmen heraus; true falls verschoben
+  avoidTrees(x, z, out, pad = 0) {
+    const g = this.treeGrid;
+    if (!g) return false;
+    const ci = Math.floor((x + 84) / 4), cj = Math.floor((z + 60) / 4);
+    let moved = false;
+    for (let dj = -1; dj <= 1; dj++) {
+      const j = cj + dj;
+      if (j < 0 || j >= g.D) continue;
+      for (let di = -1; di <= 1; di++) {
+        const i = ci + di;
+        if (i < 0 || i >= g.W) continue;
+        for (const t of g.cells[j * g.W + i]) {
+          const r = t.r + pad;
+          const dx = x - t.x, dz = z - t.z, d2 = dx * dx + dz * dz;
+          if (d2 < r * r) {
+            const d = Math.sqrt(d2) || 1e-3;
+            x = t.x + (d2 > 1e-6 ? dx / d : 1) * r;
+            z = t.z + (d2 > 1e-6 ? dz / d : 0) * r;
+            moved = true;
+          }
+        }
+      }
+    }
+    out[0] = x; out[1] = z;
+    return moved;
+  }
+  treesNear(x, z, rad) {
+    const g = this.treeGrid;
+    if (!g) return 0;
+    let n = 0;
+    const ci = Math.floor((x + 84) / 4), cj = Math.floor((z + 60) / 4), R = Math.ceil(rad / 4);
+    for (let j = cj - R; j <= cj + R; j++) for (let i = ci - R; i <= ci + R; i++) {
+      if (i < 0 || j < 0 || i >= g.W || j >= g.D) continue;
+      for (const t of g.cells[j * g.W + i]) if (Math.abs(t.x - x) < rad && Math.abs(t.z - z) < rad) n++;
+    }
+    return n;
+  }
+
   treeKind(outer = false) {
     const b = this.biome;
     const r = this.rng;

@@ -23,6 +23,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0f1c; col
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif; font-size: 14px;
   user-select: none; -webkit-user-select: none; touch-action: none; overscroll-behavior: none; }
 #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+/* sanfte Vignette für mehr Tiefe */
+body::after { content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 4;
+  background: radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 55%, rgba(10,12,24,.32) 100%); }
 .hidden { display: none !important; }
 h2, h3, .logo, .result-title { font-family: 'Cinzel', Georgia, serif; letter-spacing: 0.04em; }
 h2 { margin: 0; font-size: 20px; }
@@ -111,6 +114,10 @@ h3 small { font-family: system-ui, sans-serif; text-transform: none; letter-spac
 /* ---------- HUD ---------- */
 #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
 #hud > * { pointer-events: auto; }
+/* Leisten und Hinweise dürfen die Karte darunter nicht blockieren – nur ihre Knöpfe */
+#hud > .hud-top, #hud > .hud-bottom, #hud > .hint, #hud > .feed, #hud > .pause-banner { pointer-events: none; }
+#hud .hud-top > *, #hud .hud-bottom > * { pointer-events: auto; }
+#hud .hud-battle, #hud .roster:empty { pointer-events: none; }
 .hud-top { position: absolute; top: calc(8px + var(--safe-t)); left: calc(10px + var(--safe-l)); right: calc(10px + var(--safe-r)); display: flex; align-items: flex-start; gap: 10px; pointer-events: none; }
 .hud-top > * { pointer-events: auto; }
 .hud-title { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 6px 12px; max-width: 34vw; }

@@ -27,7 +27,7 @@ export class Stage {
     if (this.sky) scene.remove(this.sky);
     const hemi = new THREE.HemisphereLight(B.hemi[0], B.hemi[1], 1.35);
     const sun = new THREE.DirectionalLight(B.sun, 2.1);
-    sun.position.set(-60, 110, 70);
+    sun.position.set(-75, 95, 55);
     sun.target.position.set(0, 0, 0);
     if (this.quality.shadows) {
       sun.castShadow = true;
@@ -262,6 +262,61 @@ export class Overlays {
     g.add(pole, flag);
     g.position.set(x, this.map.getHeight(x, z), z);
     this.routeGroup.add(g);
+  }
+
+  // Umrisse der eigenen Legionen + Drehpfeil der gewählten (Aufstellung/Befehle)
+  updateFootprints(legions, selected, show, withArrow, t) {
+    if (!this.fp) {
+      this.fp = new Map();
+      const ag = new THREE.BufferGeometry();
+      ag.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 1.6, -1.3, 0, -0.6, 1.3, 0, -0.6, -0.55, 0, -0.6, 0.55, 0, -0.6, 0, 0, -1.9, 0.55, 0, -0.6, -0.55, 0, -1.9, 0.55, 0, -1.9], 3));
+      this.arrow = new THREE.Mesh(ag, new THREE.MeshBasicMaterial({ color: 0xffd36a, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide }));
+      this.arrow.renderOrder = 5;
+      this.group.add(this.arrow);
+    }
+    const H = (x, z) => Math.max(this.map.getHeight(x, z), this.map.hasWater ? this.map.waterLevel : -99) + 0.45;
+    for (const L of legions) {
+      let line = this.fp.get(L);
+      if (!line) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(33 * 3), 3));
+        line = new THREE.LineLoop(g, new THREE.LineBasicMaterial({ color: 0x6aa2ff, transparent: true, opacity: 0.85, depthWrite: false }));
+        line.renderOrder = 5;
+        line.frustumCulled = false;
+        this.group.add(line);
+        this.fp.set(L, line);
+      }
+      line.visible = show && L.alive;
+      if (!line.visible) continue;
+      const sel = L === selected;
+      line.material.color.setHex(sel ? 0xffd36a : 0x6aa2ff);
+      line.material.opacity = sel ? 0.95 : 0.6;
+      const fx = L.fwdX, fz = L.fwdZ, lx = fz, lz = -fx;
+      const w = L.halfW + 0.3, d = L.halfD + 0.3;
+      const corners = [[-w, d], [w, d], [w, -d], [-w, -d]];
+      const pos = line.geometry.attributes.position;
+      let k = 0;
+      for (let c = 0; c < 4; c++) {
+        const [a0, b0] = corners[c], [a1, b1] = corners[(c + 1) % 4];
+        for (let i = 0; i < 8; i++) {
+          const f = i / 8, a = a0 + (a1 - a0) * f, b = b0 + (b1 - b0) * f;
+          const x = L.x + lx * a + fx * b, z = L.z + lz * a + fz * b;
+          pos.setXYZ(k++, x, H(x, z), z);
+        }
+      }
+      pos.setXYZ(k, pos.getX(0), pos.getY(0), pos.getZ(0));
+      pos.needsUpdate = true;
+    }
+    const A = this.arrow;
+    A.visible = !!(withArrow && selected && selected.alive && selected.side === 0);
+    if (A.visible) {
+      const S = selected;
+      const r = S.halfD + 3.2 + Math.sin(t * 4) * 0.25;
+      const x = S.x + S.fwdX * r, z = S.z + S.fwdZ * r;
+      A.position.set(x, H(x, z) + 0.1, z);
+      A.rotation.y = S.face;
+      A.scale.setScalar(1.8);
+    }
   }
 
   dispose() {

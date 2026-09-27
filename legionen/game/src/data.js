@@ -2,35 +2,35 @@
 
 export const UNIT_TYPES = {
   legion: {
-    id: 'legion', size: 32, cols: 8, spacing: 1.25,
+    id: 'legion', value: 1.0, size: 32, cols: 8, spacing: 1.25,
     hp: 10, atk: 3.2, def: 3.0, speed: 2.7, range: 0,
     names: ['Legionäre', 'Plünderer'],
     desc: ['Schwert & Scutum. Der verlässliche Kern jeder Armee.', 'Axt & Rundschild. Wild und zäh.'],
     stats: { Angriff: 3, Abwehr: 3, Tempo: 3, 'Reichw.': 1 },
   },
   pike: {
-    id: 'pike', size: 36, cols: 9, spacing: 1.2,
+    id: 'pike', value: 0.9, size: 36, cols: 9, spacing: 1.2,
     hp: 10, atk: 2.6, def: 2.8, speed: 2.25, range: 0, vsCav: 2.6,
     names: ['Pikeniere', 'Speermänner'],
     desc: ['Lange Piken. Brechen jeden Reiterangriff.', 'Speerwall gegen Reiter.'],
     stats: { Angriff: 2, Abwehr: 3, Tempo: 2, 'Reichw.': 2 },
   },
   archer: {
-    id: 'archer', size: 24, cols: 8, spacing: 1.35,
+    id: 'archer', value: 0.75, size: 24, cols: 8, spacing: 1.35,
     hp: 8, atk: 1.4, def: 1.2, speed: 2.8, range: 36, volley: 2.9, arrowDmg: 3.6,
     names: ['Bogenschützen', 'Jäger'],
     desc: ['Pfeilhagel auf große Distanz. Schwach im Nahkampf.', 'Tödliche Schützen aus dem Hinterhalt.'],
     stats: { Angriff: 3, Abwehr: 1, Tempo: 3, 'Reichw.': 5 },
   },
   cavalry: {
-    id: 'cavalry', size: 20, cols: 5, spacing: 1.9,
+    id: 'cavalry', value: 1.25, size: 20, cols: 5, spacing: 1.9,
     hp: 16, atk: 3.5, def: 2.4, speed: 5.4, range: 0, charge: 2.3,
     names: ['Reiterei', 'Wolfsreiter'],
     desc: ['Schnell und wuchtig. Sturmangriff in Flanke und Rücken.', 'Schnelle Reiter für Überfälle.'],
     stats: { Angriff: 4, Abwehr: 2, Tempo: 5, 'Reichw.': 1 },
   },
   guard: {
-    id: 'guard', size: 24, cols: 6, spacing: 1.3,
+    id: 'guard', value: 1.3, size: 24, cols: 6, spacing: 1.3,
     hp: 14, atk: 3.3, def: 5.0, speed: 2.1, range: 0, arrowResist: 0.45,
     names: ['Prätorianer', 'Eisenwache'],
     desc: ['Elite mit Turmschilden. Hält jede Stellung, trotzt Pfeilen.', 'Schwer gepanzerte Elite.'],
