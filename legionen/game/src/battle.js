@@ -1,6 +1,7 @@
 // Schlachtsimulation: Bewegung, Nahkampf, Fernkampf, Sturmangriff, Rückzug, Ziele
 import { PathFinder } from './pathfind.js';
 import { clamp } from './rng.js';
+import { TIMES } from './data.js';
 import { updateTactics, stateMods, frontage, braced, chargeShock, onCasualty, onLegionLost, hitMorale, float, speedFactor } from './tactics.js';
 
 const TAU = Math.PI * 2;
@@ -32,6 +33,7 @@ export class Battle {
     this.lost = [0, 0];
     for (const L of legions) this.start[L.side] += L.maxCount;
     this.started = false;
+    this.tod = TIMES[map.tod || 'day'] || TIMES.day;
   }
 
   enemiesOf(side) { return this.legions.filter((l) => l.side !== side && l.alive); }
@@ -102,7 +104,7 @@ export class Battle {
     const slow = Math.min(...plan.map((p) => p.L.T.speed));
     for (const p of plan) {
       const L = p.L;
-      if (L.state === 'retreat' || L.state === 'regroup' || L.routed) continue;
+      if (L.state === 'retreat' || L.state === 'regroup' || L.routed || (L.lockedUntil && this.time < L.lockedUntil)) continue;
       L.orders.move = 'path';
       L.orders.waypoints = [[p.x, p.z]];
       L.cmd = { x: p.x, z: p.z, face: p.face };
@@ -119,7 +121,7 @@ export class Battle {
 
   commandAttack(legs, E) {
     for (const L of legs) {
-      if (!L.alive || L.state === 'retreat' || L.routed) continue;
+      if (!L.alive || L.state === 'retreat' || L.routed || (L.lockedUntil && this.time < L.lockedUntil)) continue;
       this.clearCommand(L);
       L.orders.target = 'legion';
       L.orders.targetId = E.id;
@@ -247,8 +249,8 @@ export class Battle {
     if (L.orders.move === 'flankL' || L.orders.move === 'flankR') {
       if (L.wp && L.wpIdx < L.wp.length) r = 7;
     }
-    if (L.isRanged) r = L.T.range;
-    return r;
+    if (L.isRanged) r = this.rangeOf(L);
+    return r * (L.isRanged ? 1 : this.tod.sight);
   }
 
   nearestEnemy(L, maxD, filter) {
@@ -338,6 +340,10 @@ export class Battle {
       return;
     }
 
+    // Reserve: erst ab Ankunftszeit einsatzbereit
+    if (L.lockedUntil && this.time < L.lockedUntil) { L.state = 'wait'; return; }
+    if (L.lockedUntil && !L.arrived) { L.arrived = true; this.events.push({ type: 'reserve', legion: L }); }
+
     // Verzögerter Start
     if (this.time < o.delay && L.lastHitT > 1.5) { L.state = 'wait'; return; }
 
@@ -400,7 +406,7 @@ export class Battle {
   rangeOf(L, t = null) {
     const hl = this.map.getHeight(L.x, L.z);
     const ht = t ? this.map.getHeight(t.x, t.z) : 1;
-    return L.T.range * (hl - ht > 2 ? 1.2 : 1);
+    return L.T.range * (hl - ht > 2 ? 1.2 : 1) * this.tod.range;
   }
 
   thinkRanged(L) {
@@ -891,7 +897,7 @@ export class Battle {
   fireVolley(A, B) {
     const T = A.T;
     const d = dist(A, B);
-    let acc = 0.46 - 0.24 * Math.min(1, d / T.range);
+    let acc = (0.46 - 0.24 * Math.min(1, d / T.range)) * this.tod.acc * (this.map.biome === 'highland' ? 0.9 : 1);
     if (B.melee) acc *= 0.75;
     const [atk, def] = this.mods(A, B, true);
     const n = A.count;
@@ -1105,6 +1111,10 @@ export class Battle {
       const att = 1 - ob.owner;
       if (present[att] > 0 && present[ob.owner] === 0) ob.hold += dt;
       else ob.hold = Math.max(0, ob.hold - dt * 0.5);
+    } else if (ob.type === 'exit') {
+      let esc = 0;
+      for (const L of this.legions) if (L.side === 0 && L.alive && !L.routed && Math.hypot(L.x - ob.x, L.z - ob.z) < ob.r + L.halfW * 0.5) esc += L.count;
+      ob.escaped = esc;
     } else if (ob.type === 'hill') {
       if (present[0] > 0 && present[1] === 0) ob.score[0] += dt * 1.6;
       if (present[1] > 0 && present[0] === 0) ob.score[1] += dt * 1.6;
@@ -1134,11 +1144,13 @@ export class Battle {
       const att = 1 - ob.owner;
       return end(att, att === 0 ? 'Der Burghof ist eingenommen – die Burg gehört dir!' : 'Der Feind hat den Burghof eingenommen.');
     }
+    if (ob && ob.type === 'exit' && ob.escaped >= this.start[0] * ob.need) return end(0, 'Der Ausbruch ist gelungen – dein Heer entkommt dem Hinterhalt!');
     if (ob && ob.type === 'hill') {
       if (ob.score[0] >= ob.need) return end(0, 'Der Steinkreis ist in deiner Hand!');
       if (ob.score[1] >= ob.need) return end(1, 'Der Feind hält den Steinkreis.');
     }
     if (this.time >= this.timeLimit) {
+      if (ob && ob.type === 'exit') return end(1, 'Die Zeit ist um – der Hinterhalt hat dich festgenagelt.');
       if (ob && ob.type === 'keep') {
         const w = ob.owner;
         return end(w, w === 0 ? 'Die Mauern haben gehalten. Die Burg ist sicher!' : 'Die Zeit ist abgelaufen – die Burg hält stand.');

@@ -18,21 +18,23 @@ for (const sc of SCENARIO_ORDER) {
     const pTypes = ['legion', 'archer', 'cavalry', 'pike', 'guard'].slice(0, 2 + (r % 4));
     const player = pTypes.map((t, i) => Object.assign(new Legion(0, t, 0, 0, 1), { index: i }));
     const bTypes = process.env.SAME ? pTypes.slice() : botArmy(pTypes, sc, rng);
-    const sm = botSizeMult(pTypes, bTypes, 1);
+    const sm = botSizeMult(pTypes, bTypes, 1) * (sc === 'ambush' ? 0.85 : 1);
     const bot = bTypes.map((t, i) => Object.assign(new Legion(1, t, 0, 0, sm), { index: i }));
     autoDeploy(player, map.zones[0], 0, map, rng);
     autoDeploy(bot, map.zones[1], 1, map, rng);
     botOrders(bot, sc, map, 'normal', rng);
     if (process.env.MIRROR) botOrders(player, sc, map, 'normal', rng);
+    if (process.env.ESC) for (const L of player) { L.orders.target = 'objective'; L.orders.move = 'advance'; L.orders.formation = 'block'; L.orders.retreatAt = 0; }
     const b = new Battle(map, process.env.SWAP ? [...bot, ...player] : [...player, ...bot], SCENARIOS[sc]);
     const brain = new BotBrain(b, 'normal', rng);
     const brain0 = process.env.MIRROR ? new BotBrain(b, 'normal', rng, 0) : null;
     const stuck = player.concat(bot).filter((L) => !map.isPassable(L.x, L.z, L.side));
     b.begin();
+    if (process.env.ESC && map.objective && map.objective.type === 'exit') b.commandMove(player, map.objective.x, map.objective.z);
     let steps = 0;
     while (!b.over && steps < 30 * 800) { b.step(1 / 30); brain.update(1 / 30); if (brain0) brain0.update(1 / 30); steps++; }
     const g = map.gate ? ` gate=${Math.round(map.gate.hp)}` : '';
-    const ob = map.objective ? ` obj=${map.objective.type === 'keep' ? map.objective.hold.toFixed(1) : map.objective.score.map((x) => x.toFixed(0))}` : '';
+    const ob = map.objective ? ` obj=${map.objective.type === 'keep' ? map.objective.hold.toFixed(1) : map.objective.type === 'exit' ? 'esc' + map.objective.escaped : map.objective.score.map((x) => x.toFixed(0))}` : '';
     console.log(`${sc.padEnd(8)} r${r} t=${b.time.toFixed(0)}s winner=${b.winner} ${b.reason} | P ${b.strength(0)}/${b.start[0]} B ${b.strength(1)}/${b.start[1]}${g}${ob} stuck=${stuck.length} ms=${Date.now() - t0}`);
     if (!b.over || stuck.length) fails++;
   }

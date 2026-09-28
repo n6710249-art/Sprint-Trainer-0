@@ -7,7 +7,7 @@ import { Battle } from './battle.js';
 import { botArmy, autoDeploy, botOrders, BotBrain, botSizeMult, findSpot } from './ai.js';
 import { UnitRenderer } from './unitsRender.js';
 import { Sound } from './audio.js';
-import { UNIT_TYPES, TYPE_ORDER, SCENARIOS, SCENARIO_ORDER, BIOMES, DIFFICULTY, FACTIONS } from './data.js';
+import { UNIT_TYPES, TYPE_ORDER, SCENARIOS, SCENARIO_ORDER, BIOMES, DIFFICULTY, FACTIONS, TIMES, TIME_ORDER } from './data.js';
 import { unitIcon, scenIcon, STATE_GLYPH, ROMAN } from './icons.js';
 import { mulberry32 } from './rng.js';
 
@@ -32,7 +32,7 @@ sound.setEnabled(settings.sound);
 
 const G = {
   phase: 'loading',
-  cfg: Object.assign({ scenario: 'random', biome: 'random', diff: 'normal', army: ['legion', 'legion', 'archer', 'cavalry'] }, store.get('cfg', {})),
+  cfg: Object.assign({ scenario: 'random', biome: 'random', tod: 'random', diff: 'normal', army: ['legion', 'legion', 'archer', 'cavalry'] }, store.get('cfg', {})),
   cur: null,
   selected: null,
   speed: 1,
@@ -51,14 +51,19 @@ function resolveCfg(cfg) {
   const rng = mulberry32((Math.random() * 1e9) | 0);
   const scenario = cfg.scenario === 'random' ? rng.pick(SCENARIO_ORDER) : cfg.scenario;
   let biome = cfg.biome === 'random' ? rng.pick(Object.keys(BIOMES)) : cfg.biome;
-  return { scenario, biome, diff: cfg.diff, army: cfg.army.slice(), seed: (Math.random() * 1e9) | 0 };
+  // Tageszeit: meist Tag, manchmal Abend, Nacht oder Nebel
+  const tod = !cfg.tod || cfg.tod === 'random' ? rng.pick(['day', 'day', 'day', 'dawn', 'dusk', 'dusk', 'night', 'fog']) : cfg.tod;
+  // Reserven: in offenen Schlachten jede zweite Partie
+  const reserves = !['assault', 'defend', 'ambush'].includes(scenario) && rng.chance(0.5);
+  return { scenario, biome, tod, reserves, diff: cfg.diff, army: cfg.army.slice(), seed: (Math.random() * 1e9) | 0 };
 }
 
 function createBattle(opts) {
   disposeBattle();
   resetIds();
   const map = new BattleMap(opts.scenario, opts.biome, opts.seed);
-  stage.setupEnvironment(opts.biome, map.fogDensity);
+  map.tod = opts.tod || 'day';
+  stage.setupEnvironment(opts.biome, map.fogDensity * (map.tod === 'fog' ? 2.8 : map.tod === 'night' ? 1.4 : 1), map.tod);
   stage.groundFn = (x, z) => map.terrainHeight(x, z);
   const world = buildWorld(map, stage.scene);
   const rng = mulberry32(opts.seed + 7);
@@ -66,8 +71,25 @@ function createBattle(opts) {
   const pTypes = opts.demo ? botArmy(['legion', 'archer', 'cavalry', 'pike'], opts.scenario, rng) : opts.army;
   const player = pTypes.map((t, i) => { const L = new Legion(0, t, 0, 0, 1); L.index = i; return L; });
   const botTypes = opts.botTypes || botArmy(pTypes, opts.scenario, rng);
-  const sizeMult = botSizeMult(pTypes, botTypes, opts.demo ? 1 : D.size);
+  const sizeMult = botSizeMult(pTypes, botTypes, opts.demo ? 1 : D.size) * (opts.scenario === 'ambush' ? 0.85 : 1);
   const bot = botTypes.map((t, i) => { const L = new Legion(1, t, 0, 0, sizeMult); L.index = i; return L; });
+  // Reserve-Legionen am Lager, die erst später eingreifen dürfen
+  if (opts.reserves) {
+    const arrive = 60 + ((opts.seed >>> 3) % 40);
+    for (const [side, list] of [[0, player], [1, bot]]) {
+      const t = ['legion', 'cavalry', 'pike', 'guard', 'archer'][(opts.seed >>> (side * 3)) % 5];
+      const L = new Legion(side, t, 0, 0, side ? sizeMult : 1);
+      L.index = list.length;
+      L.reserve = true;
+      L.lockedUntil = arrive;
+      L.name = 'Reserve ' + L.name;
+      const c = map.camps[side];
+      const zn = { x0: c.x - (side ? 6 : -2) - 8, x1: c.x - (side ? 6 : -2) + 8, z0: c.z - 16, z1: c.z + 16 };
+      const [px, pz] = findSpot(map, zn, (zn.x0 + zn.x1) / 2, c.z, L, side, list);
+      L.x = px; L.z = pz; L.buildSoldiers();
+      list.push(L);
+    }
+  }
   const all = [...player, ...bot];
   autoDeploy(player, map.zones[0], 0, map, rng);
   autoDeploy(bot, map.zones[1], 1, map, rng);
@@ -76,7 +98,7 @@ function createBattle(opts) {
   const battle = new Battle(map, all, SCENARIOS[opts.scenario]);
   battle.soldiersInStep = false;
   const brain = new BotBrain(battle, opts.diff, rng);
-  const units = new UnitRenderer(stage.scene, all, map, stage.quality.shadows);
+  const units = new UnitRenderer(stage.scene, all, map, stage.quality.shadows, map.tod);
   const overlays = new Overlays(stage.scene, map);
   const B = { opts, map, world, legions: all, player, bot, battle, brain, units, overlays, labels: new Map(), time: 0, dustT: 0 };
   if (opts.demo) {
@@ -107,6 +129,7 @@ function disposeBattle() {
 // =====================================================================
 // Statussymbol: Flucht/Wanken/Erschöpfung haben Vorrang vor dem Zustand
 function glyphOf(L) {
+  if (L.lockedUntil && (!G.cur || G.cur.battle.time < L.lockedUntil)) return '⏳';
   if (L.routed) return '⚑';
   if (L.morale < 30) return '⚠';
   if (L.stamina < 12) return '💤';
@@ -219,6 +242,7 @@ function renderSetup() {
   sg.innerHTML = ['random', ...SCENARIO_ORDER].map((id) => `<div class="scen ${c.scenario === id ? 'on' : ''}" data-s="${id}">${scenIcon(id)}<span>${id === 'random' ? 'Zufall' : SCENARIOS[id].name}</span></div>`).join('');
   $('#scen-desc').textContent = c.scenario === 'random' ? 'Ein zufälliges Szenario auf einer zufälligen Karte – lass dich überraschen.' : SCENARIOS[c.scenario].desc;
   $('#biome-chips').innerHTML = [['random', 'Zufall'], ...Object.entries(BIOMES).map(([k, v]) => [k, v.name])].map(([k, n]) => `<button class="chip ${c.biome === k ? 'on' : ''}" data-b="${k}">${n}</button>`).join('');
+  $('#tod-chips').innerHTML = [['random', 'Zufall'], ...TIME_ORDER.map((k) => [k, TIMES[k].name])].map(([k, n]) => `<button class="chip ${(c.tod || 'random') === k ? 'on' : ''}" data-tod="${k}">${n}</button>`).join('');
   $('#diff-chips').innerHTML = Object.entries(DIFFICULTY).map(([k, v]) => `<button class="chip ${c.diff === k ? 'on' : ''}" data-d="${k}">${v.name}</button>`).join('');
   const slots = [];
   for (let i = 0; i < 5; i++) {
@@ -244,12 +268,14 @@ $('#scr-setup').addEventListener('click', (e) => {
   const s = e.target.closest('[data-s]');
   const b = e.target.closest('[data-b]');
   const d = e.target.closest('[data-d]');
+  const td = e.target.closest('[data-tod]');
   const rm = e.target.closest('[data-rm]');
   const sl = e.target.closest('[data-slot]');
   const t = e.target.closest('[data-t]');
   if (s) c.scenario = s.dataset.s;
   else if (b) c.biome = b.dataset.b;
   else if (d) c.diff = d.dataset.d;
+  else if (td) c.tod = td.dataset.tod;
   else if (rm) { c.army.splice(+rm.dataset.rm, 1); G.slotSel = Math.min(c.army.length, 4); }
   else if (sl) { G.slotSel = Math.min(+sl.dataset.slot, c.army.length); }
   else if (t) {
@@ -314,6 +340,8 @@ function enterBattle() {
   G.selected = null;
   G.sel = [];
   banner('ZUM ANGRIFF!');
+  if (TIMES[B.map.tod].desc && (B.map.tod === 'night' || B.map.tod === 'fog')) setTimeout(() => toast(TIMES[B.map.tod].desc, 3500), 900);
+  if (B.player.some((l) => l.reserve)) setTimeout(() => toast(`Reserven treffen nach ${Math.round(B.player.find((l) => l.reserve).lockedUntil)} s ein`, 3000), 4500);
   setTimeout(() => { if (G.phase === 'battle' && !G.sel.length) hint('Legion antippen → Boden = marschieren · Feind = angreifen · lang drücken & ziehen = Rahmen / Ausrichtung'); }, 2400);
   sound.play('drum');
   setTimeout(() => sound.play('drum'), 350);
@@ -324,7 +352,7 @@ function setupHud() {
   const ph = G.phase;
   const sc = SCENARIOS[B.opts.scenario];
   $('#hud-phase').textContent = ph === 'deploy' ? `Aufstellung · ${sc.name}` : ph === 'orders' ? `Befehle · ${sc.name}` : sc.name;
-  $('#hud-goal').textContent = sc.goal + ` (${BIOMES[B.opts.biome].name})`;
+  $('#hud-goal').textContent = sc.goal + ` (${BIOMES[B.opts.biome].name}, ${TIMES[B.map.tod].name})`;
   $('#hud-battle').style.visibility = ph === 'battle' ? 'visible' : 'hidden';
   $('#speed-ctl').style.display = ph === 'battle' ? '' : 'none';
   $('#hud-time').style.display = ph === 'battle' ? '' : 'none';
@@ -560,7 +588,7 @@ function renderTab(L) {
   $('#tab-body').innerHTML = groups.map((g) => {
     let opts = g.opts;
     if (g.key === 'target') {
-      opts = opts.filter(([v]) => v !== 'objective' || ob).map(([v, n]) => [v, v === 'objective' ? (ob.type === 'keep' ? '🏰 Burghof' : '⛰ Steinkreis') : n]);
+      opts = opts.filter(([v]) => v !== 'objective' || ob).map(([v, n]) => [v, v === 'objective' ? (ob.type === 'keep' ? '🏰 Burghof' : ob.type === 'exit' ? '🏁 Talausgang' : '⛰ Steinkreis') : n]);
     }
     const cur = o[g.key];
     const chips = opts.map(([v, n]) => `<button class="chip ${String(cur) === String(v) ? 'on' : ''}" data-k="${g.key}" data-v="${v}">${n}</button>`).join('');
@@ -763,7 +791,8 @@ window.addEventListener('pointermove', (e) => {
   if (gest.type === 'tap' && moved > 9) {
     clearTimeout(G.lpT);
     const L = gest.legion;
-    if (G.phase === 'deploy' && L && L.side === 0 && gest.button !== 2) {
+    if (G.phase === 'deploy' && L && L.side === 0 && L.reserve) { toast('Die Reserve wartet im Lager'); gest.type = 'pan'; }
+    else if (G.phase === 'deploy' && L && L.side === 0 && gest.button !== 2) {
       gest.type = gest.turn ? 'turn' : 'drag';
       // Griffpunkt merken, damit die Legion nicht unter den Finger springt
       gest.off = gest.g0 ? [L.x - gest.g0.x, L.z - gest.g0.z] : [0, 0];
@@ -954,7 +983,7 @@ function handleTap(x, y, L) {
     return;
   }
   if (L) { sound.play('select'); select(L); return; }
-  if (G.phase === 'deploy' && G.selected && G.selected.side === 0) {
+  if (G.phase === 'deploy' && G.selected && G.selected.side === 0 && !G.selected.reserve) {
     const p = pickGround(x, y);
     const zn = B.map.zones[0];
     if (p && p.x > zn.x0 && p.x < zn.x1 && p.z > zn.z0 && p.z < zn.z1) {
@@ -992,7 +1021,10 @@ function updateHud() {
   const oe = $('#hud-obj');
   if (ob) {
     oe.classList.add('show');
-    if (ob.type === 'keep') {
+    if (ob.type === 'exit') {
+      const need = Math.ceil(bt.start[0] * ob.need);
+      oe.innerHTML = `🏁 Talausgang <span class="pbar"><i style="width:${Math.min(100, ob.escaped / need * 100)}%;background:#6aa2ff"></i></span> ${ob.escaped}/${need} Mann`;
+    } else if (ob.type === 'keep') {
       const att = 1 - ob.owner;
       const col = att === 0 ? '#6aa2ff' : '#ff6a5a';
       oe.innerHTML = `🏰 Burghof ${att === 0 ? 'einnehmen' : 'verteidigen'} <span class="pbar"><i style="width:${ob.hold / ob.need * 100}%;background:${col}"></i></span> ${Math.floor(ob.hold)}/${ob.need} s`;
@@ -1087,6 +1119,12 @@ function processEvents(B) {
         break;
       case 'rally': if (!demo) feed(`${legionTitle(ev.legion)} hat sich gesammelt`, ev.legion.side); break;
       case 'float': floatText(ev.legion, ev.text, ev.cls); break;
+      case 'reserve':
+        if (!demo) {
+          feed(`${legionTitle(ev.legion)} greift ein!`, ev.legion.side);
+          if (ev.legion.side === 0) { banner('VERSTÄRKUNG!'); sound.play('horn', 0.7); }
+        }
+        break;
       case 'rout':
         if (!demo) { feed(`${legionTitle(ev.legion)} bricht und flieht!`, ev.side); sound.play('retreat', 0.9); }
         break;
@@ -1182,6 +1220,11 @@ function showHelp() {
   <li><b>Ausdauer</b>: Laufen und Kämpfen ermüdet (💤 = erschöpft, schwächer und langsamer). Wer wartet, kämpft ausgeruht.</li>
   <li><b>Frontbreite</b>: Nur die vorderen Reihen kämpfen. Greifst du einen gebundenen Feind zusätzlich von der Seite an, bringst du viel mehr Männer ins Gefecht.</li>
   <li>Tipp: Binde den Feind frontal mit Infanterie, dann Reiter oder zweite Legion in Flanke/Rücken.</li></ul>
+  <h4>Tageszeit, Reserven, Hinterhalt</h4>
+  <ul><li><b>Nacht</b>: Schützen −30 % Reichweite, Feinde werden später erkannt. <b>Nebel</b>: −20 % Reichweite, weniger Treffer.</li>
+  <li><b>Reserven</b> (⏳) warten im Lager und greifen nach etwa einer Minute ein.</li>
+  <li><b>Hinterhalt</b>: Durchbrechen zum Talausgang – oder die getrennten Feindgruppen einzeln schlagen.</li>
+  <li>Wasser ist nur über Brücken, Furten und Sümpfe passierbar.</li></ul>
   <h4>Taktik</h4>
   <ul><li><b>Pikeniere</b> brechen Reiterangriffe (×2,6 Schaden gegen Reiter).</li>
   <li><b>Reiterei</b> zerschlägt Bogenschützen und trifft mit Sturmangriff hart – am besten in Flanke oder Rücken.</li>

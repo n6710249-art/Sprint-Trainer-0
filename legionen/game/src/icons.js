@@ -42,6 +42,8 @@ export function scenIcon(id) {
       return wrap(`<path d="M6 16 Q12 12 18 16 T30 16 T42 16" ${s}/><path d="M6 24 Q12 20 18 24 T30 24 T42 24" stroke="#6ab4f0" stroke-width="2" fill="none"/><path d="M6 32 Q12 28 18 32 T30 32 T42 32" ${s}/><path d="M16 38 Q24 30 32 38" stroke="#caa06a" stroke-width="2.4" fill="none"/>`);
     case 'hill':
       return wrap(`<path d="M4 40 Q24 8 44 40 Z" ${s}/><rect x="18" y="18" width="3" height="7" fill="#f5d27a"/><rect x="23" y="16" width="3" height="8" fill="#f5d27a"/><rect x="28" y="18" width="3" height="7" fill="#f5d27a"/>`);
+    case 'ambush':
+      return wrap(`<path d="M4 16 Q14 10 24 22 Q34 10 44 16" ${s}/><path d="M4 34 Q14 40 24 28 Q34 40 44 34" ${s}/><path d="M14 25 L34 25" stroke="#4a8cf0" stroke-width="3" stroke-linecap="round"/><path d="M34 25 L29 21 M34 25 L29 29" stroke="#4a8cf0" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="12" r="2.4" fill="#e0473c"/><circle cx="36" cy="38" r="2.4" fill="#e0473c"/>`);
     case 'forest':
       return wrap(`<path d="M14 40 L14 34 M14 34 L6 34 L14 20 L22 34 Z M9 26 L14 14 L19 26" ${s}/><path d="M32 40 L32 32 M32 32 L22 32 L32 12 L42 32 Z M26 22 L32 8 L38 22" ${s}/>`);
   }

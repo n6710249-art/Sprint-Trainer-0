@@ -169,6 +169,12 @@ export const SCENARIOS = {
     goal: 'Halte den Steinkreis bis 100 Punkte – oder vernichte den Feind.',
     time: 420,
   },
+  ambush: {
+    name: 'Hinterhalt', icon: 'ambush',
+    desc: 'Dein Heer marschiert durchs Tal – da stürmt der Rabenclan von beiden Hängen herab.',
+    goal: 'Bring die Hälfte deiner Männer zum Talausgang (Osten) oder vernichte den Feind. 5:00.',
+    time: 300,
+  },
   forest: {
     name: 'Nebelwald', icon: 'forest',
     desc: 'Dichter Wald bietet Deckung vor Pfeilen – und Raum für Hinterhalte.',
@@ -176,7 +182,17 @@ export const SCENARIOS = {
     time: 420,
   },
 };
-export const SCENARIO_ORDER = ['assault', 'defend', 'canyon', 'river', 'hill', 'forest'];
+export const SCENARIO_ORDER = ['assault', 'defend', 'canyon', 'river', 'hill', 'forest', 'ambush'];
+
+// Tageszeit & Wetter – mit taktischer Wirkung
+export const TIMES = {
+  day: { name: 'Tag', range: 1, sight: 1, acc: 1, desc: '' },
+  dawn: { name: 'Morgengrauen', range: 1, sight: 0.9, acc: 1, desc: 'Weiches Morgenlicht.' },
+  dusk: { name: 'Abend', range: 0.95, sight: 0.9, acc: 0.95, desc: 'Tiefe Sonne, lange Schatten.' },
+  night: { name: 'Nacht', range: 0.7, sight: 0.7, acc: 0.85, desc: 'Nacht: Reichweite der Schützen −30 %, Legionen erkennen Feinde später.' },
+  fog: { name: 'Nebel', range: 0.8, sight: 0.75, acc: 0.85, desc: 'Nebel: Schützen sehen weniger weit, Flankenangriffe werden spät bemerkt.' },
+};
+export const TIME_ORDER = ['day', 'dawn', 'dusk', 'night', 'fog'];
 
 export const DIFFICULTY = {
   easy: { name: 'Leicht', size: 0.85, think: 3.5, smart: 0.35 },

@@ -73,6 +73,11 @@ export class BattleMap {
       this.canyon = { amp: r.range(8, 13), ph: this.phase, pinch: r.range(-15, 15), top: 12 };
       this.biomeTint = true;
     }
+    if (sc === 'ambush') {
+      this.valley = { amp: r.range(3, 7), ph: this.phase };
+      this.roadZ = 0;
+      this.objective = { type: 'exit', x: 60, z: this.valleyZ(60), r: 12, need: 0.5, escaped: 0 };
+    }
     if (sc === 'hill') {
       this.objective = { type: 'hill', x: r.range(-5, 5), z: r.range(-5, 5), r: 9, score: [0, 0], need: 100 };
     }
@@ -102,6 +107,10 @@ export class BattleMap {
     this.buildTreeHash();
   }
 
+  valleyZ(x) {
+    return Math.sin(x * 0.03 + this.valley.ph) * this.valley.amp;
+  }
+
   canyonCenter(x) {
     const c = this.canyon;
     return Math.sin(x * 0.035 + c.ph) * c.amp + Math.sin(x * 0.09 + c.ph * 2) * 2.5;
@@ -123,13 +132,15 @@ export class BattleMap {
     const c = this.castle;
     // freier Mittelbereich zwischen den Aufstellungszonen (bei Burgen: zwischen Burg und Angreifern)
     const xr = c ? (c.cx > 0 ? [-38, 12] : [-12, 38]) : [-38, 38];
-    const pool = sc === 'forest' ? ['marsh', 'village', 'ridge', 'hedges', 'lake', 'ruins', 'pillars']
+    const pool = sc === 'ambush' ? ['pillars', 'ruins', 'pillars']
+      : sc === 'forest' ? ['marsh', 'village', 'ridge', 'hedges', 'lake', 'ruins', 'pillars']
       : sc === 'river' ? ['ridge', 'village', 'hedges', 'plateau', 'pillars', 'ruins', 'marsh']
       : c ? ['village', 'hedges', 'ridge', 'marsh', 'pillars', 'ruins']
       : ['ridge', 'plateau', 'village', 'marsh', 'lake', 'hedges', 'pillars', 'ruins'];
     const n = c ? r.int(1, 2) : r.int(2, 3);
     const rad = { ridge: 10, plateau: 12, village: 11, marsh: 10, lake: 9, hedges: 12, pillars: 7, ruins: 5 };
     const ok = (x, z, rr) => {
+      if (sc === 'ambush' && Math.abs(z - this.valleyZ(x)) < rr + 14) return false;
       if (this.objective && Math.hypot(x - this.objective.x, z - this.objective.z) < rr + 12) return false;
       if (this.river && Math.abs(x - this.riverX(z)) < rr + 9) return false;
       if (c && Math.max(Math.abs(x - c.cx), Math.abs(z - c.cz)) < c.half + 10 + rr) return false;
@@ -137,7 +148,7 @@ export class BattleMap {
     };
     const bag = pool.slice();
     // dazu 0–2 kleine Teiche
-    const ponds = sc === 'river' ? r.int(0, 1) : r.int(0, 2);
+    const ponds = sc === 'river' || sc === 'ambush' ? 0 : r.int(0, 2);
     for (let i = 0; i < ponds; i++) {
       const rr = r.range(3.5, 5.5);
       for (let t = 0; t < 40; t++) {
@@ -291,6 +302,10 @@ export class BattleMap {
       }
     } else if (sc === 'forest') {
       h = h * 1.2;
+    } else if (sc === 'ambush') {
+      const dz = Math.abs(z - this.valleyZ(x));
+      h = h * 0.6 + 8 * smooth(11, 34, dz) + N(x * 0.06, z * 0.06) * 1.2 * smooth(14, 30, dz);
+      if (dz < 3.5 && Math.abs(x) < 74) g = G_DIRT;
     }
 
     if (this.castle) {
@@ -470,6 +485,11 @@ export class BattleMap {
     }
     if (this.scenario === 'canyon') {
       this.zones = [{ x0: -73, x1: -52, z0: -40, z1: 40 }, { x0: 52, x1: 73, z0: -40, z1: 40 }];
+    }
+    if (this.scenario === 'ambush') {
+      const vz = this.valleyZ(-40);
+      this.zones = [{ x0: -60, x1: -26, z0: vz - 10, z1: vz + 10 }, { x0: -22, x1: 26, z0: 27, z1: 45 }];
+      this.zoneExtra = { x0: -22, x1: 26, z0: -45, z1: -27 }; // zweite Feindgruppe am Südhang
     }
     // Lager hinter den Zonen
     for (let s = 0; s < 2; s++) {
@@ -682,7 +702,7 @@ export class BattleMap {
 
   makeForests() {
     const r = this.rng;
-    const count = this.scenario === 'forest' ? r.int(11, 14) : this.scenario === 'canyon' ? 0 : r.int(2, 4);
+    const count = this.scenario === 'forest' ? r.int(11, 14) : this.scenario === 'canyon' ? 0 : this.scenario === 'ambush' ? r.int(6, 9) : r.int(2, 4);
     let tries = 0;
     while (this.forests.length < count && tries++ < 300) {
       const x = r.range(-44, 44), z = r.range(-44, 44);
@@ -690,6 +710,7 @@ export class BattleMap {
       if (this.nearStructure(x, z, rad + 4)) continue;
       if (this.objective && Math.hypot(x - this.objective.x, z - this.objective.z) < rad + 12) continue;
       if (this.scenario === 'river' && Math.abs(x - this.riverX(z)) < rad + 7) continue;
+      if (this.scenario === 'ambush' && Math.abs(z - this.valleyZ(x)) < rad + 12) continue;
       if (this.forests.some((f) => Math.hypot(f.x - x, f.z - z) < f.r + rad + 3)) continue;
       const k = this.cellIndex(x, z);
       if (k < 0 || this.blocked[k]) continue;

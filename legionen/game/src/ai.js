@@ -30,6 +30,16 @@ export function botSizeMult(playerTypes, botTypes, diffSize) {
 }
 
 export function autoDeploy(legions, zone, side, map, rng) {
+  legions = legions.filter((l) => !l.reserve);
+  // Hinterhalt: der Bot teilt sich auf beide Hänge auf, Blick ins Tal
+  if (map.zoneExtra && side === 1 && !zone.split) {
+    const north = legions.filter((_, i) => i % 2 === 0), south = legions.filter((_, i) => i % 2 === 1);
+    autoDeploy(north, { ...zone, split: true }, side, map, rng);
+    autoDeploy(south, { ...map.zoneExtra, split: true }, side, map, rng);
+    for (const L of north) { L.face = Math.PI; L.buildSoldiers(); }
+    for (const L of south) { L.face = 0; L.buildSoldiers(); }
+    return;
+  }
   const front = side === 0 ? zone.x1 - 6 : zone.x0 + 6;
   const back = side === 0 ? zone.x0 + 6 : zone.x1 - 6;
   const cz = map.canyon ? map.canyonCenter(front) : (zone.z0 + zone.z1) / 2;
@@ -118,6 +128,12 @@ export function botOrders(legions, scenario, map, diff, rng) {
       if (L.isRanged) { o.move = 'advance'; o.target = 'nearest'; }
     }
     if (scenario === 'canyon' && L.typeId === 'cavalry') o.move = 'advance';
+    if (scenario === 'ambush') {
+      // von den Hängen herabstürmen; Schützen bleiben oben (Hochstand)
+      o.retreatAt = 0.2;
+      if (L.isRanged) { o.move = 'hold'; o.skirmish = true; }
+      else { o.move = 'advance'; o.stance = 'aggressive'; o.delay = L.typeId === 'cavalry' ? 6 : 1; }
+    }
   }
 }
 

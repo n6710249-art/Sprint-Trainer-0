@@ -17,7 +17,7 @@ const _axisY = new THREE.Vector3(0, 1, 0);
 const HIDE = new THREE.Matrix4().makeScale(0, 0, 0);
 
 export class UnitRenderer {
-  constructor(scene, legions, map, shadows) {
+  constructor(scene, legions, map, shadows, tod = 'day') {
     this.scene = scene;
     this.map = map;
     this.legions = legions;
@@ -102,8 +102,21 @@ export class UnitRenderer {
       bar.position.y = 3.2;
       g.add(bar);
       g.traverse((o) => { o.castShadow = shadows; });
+      // nachts und im Nebel: Fackel am Feldzeichen
+      let torch = null;
+      if (tod === 'night' || tod === 'fog' || tod === 'dusk') {
+        torch = new THREE.Group();
+        const f1 = new THREE.Mesh(new THREE.ConeGeometry(0.26, 0.7, 5), new THREE.MeshBasicMaterial({ color: 0xffa23a }));
+        const f2 = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.45, 5), new THREE.MeshBasicMaterial({ color: 0xfff0a0 }));
+        f1.position.y = 0.35; f2.position.y = 0.3;
+        const glow = new THREE.Mesh(new THREE.SphereGeometry(0.9, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: tod === 'night' ? 0.22 : 0.12, depthWrite: false }));
+        glow.position.y = 0.35;
+        torch.add(f1, f2, glow);
+        torch.position.set(0.75, 3.3, 0);
+        g.add(torch);
+      }
       this.group.add(g);
-      this.standards.set(L, { g, flag });
+      this.standards.set(L, { g, flag, torch });
     }
 
     // Auswahlringe
@@ -220,6 +233,7 @@ export class UnitRenderer {
           fg.array[i * 3 + 2] = base[i * 3 + 2] + Math.sin(x * 3 + t * 5 + L.id) * 0.12 * (x + 0.65);
         }
         fg.needsUpdate = true;
+        if (st.torch) { const k = 0.85 + Math.sin(t * 19 + L.id) * 0.1 + Math.sin(t * 27 + L.id * 3) * 0.07; st.torch.scale.set(1, k, 1); }
       } else if (st.g.visible) {
         st.g.rotation.z = Math.min(1.4, (st.g.rotation.z || 0) + dt * 2);
         if (st.g.rotation.z >= 1.4) st.g.visible = false;

@@ -19,15 +19,24 @@ export class Stage {
     window.addEventListener('resize', () => this.resize());
   }
 
-  setupEnvironment(biomeId, fogDensity) {
-    const B = BIOMES[biomeId];
+  setupEnvironment(biomeId, fogDensity, tod = 'day') {
+    const B0 = BIOMES[biomeId];
+    // Tageszeit färbt Himmel, Licht und Nebel um
+    const T = {
+      day: null,
+      dawn: { sky: [0xf2b4c4, 0xfde6d6], fog: 0xf0d8d0, sun: 0xffd6be, sunI: 1.7, hemiI: 1.15, amb: 0.22, pos: [95, 45, -40] },
+      dusk: { sky: [0xe8804a, 0xffcf9a], fog: 0xe6b48a, sun: 0xffa860, sunI: 1.8, hemiI: 0.95, amb: 0.18, pos: [-115, 38, 30] },
+      night: { sky: [0x070b1c, 0x1a2644], fog: 0x141c34, sun: 0x9fb4ff, sunI: 0.75, hemiI: 0.5, amb: 0.14, pos: [60, 90, -60], hemiC: [0x4a5a8a, 0x141a28] },
+      fog: { sky: [0xaab4be, 0xd4d9de], fog: 0xc8cfd5, sun: 0xeef2f6, sunI: 1.1, hemiI: 1.25, amb: 0.3, pos: [-60, 110, 50] },
+    }[tod];
+    const B = T ? { ...B0, sky: T.sky, fog: T.fog, sun: T.sun, hemi: T.hemiC || B0.hemi } : B0;
     const scene = this.scene;
     // alte Lichter entfernen
     if (this.lights) for (const l of this.lights) scene.remove(l);
     if (this.sky) scene.remove(this.sky);
-    const hemi = new THREE.HemisphereLight(B.hemi[0], B.hemi[1], 1.35);
-    const sun = new THREE.DirectionalLight(B.sun, 2.1);
-    sun.position.set(-75, 95, 55);
+    const hemi = new THREE.HemisphereLight(B.hemi[0], B.hemi[1], T ? T.hemiI : 1.35);
+    const sun = new THREE.DirectionalLight(B.sun, T ? T.sunI : 2.1);
+    if (T) sun.position.set(...T.pos); else sun.position.set(-75, 95, 55);
     sun.target.position.set(0, 0, 0);
     if (this.quality.shadows) {
       sun.castShadow = true;
@@ -38,7 +47,7 @@ export class Stage {
       sun.shadow.bias = -0.0008;
       sun.shadow.normalBias = 0.4;
     }
-    const amb = new THREE.AmbientLight(0xffffff, 0.25);
+    const amb = new THREE.AmbientLight(0xffffff, T ? T.amb : 0.25);
     scene.add(hemi, sun, sun.target, amb);
     this.lights = [hemi, sun, sun.target, amb];
     // Himmel (Farbverlauf)
@@ -167,9 +176,12 @@ export class Overlays {
   }
 
   makeZones() {
-    for (let s = 0; s < 2; s++) {
-      const z = this.map.zones[s];
+    const list = [this.map.zones[0], this.map.zones[1]];
+    if (this.map.zoneExtra) list.push(this.map.zoneExtra);
+    for (let s = 0; s < list.length; s++) {
+      const z = list[s];
       const col = s === 0 ? 0x4a8cf0 : 0xe0473c;
+      const side = s === 0 ? 0 : 1;
       const g = new THREE.Group();
       g.add(this.terrainPatch(z.x0, z.z0, z.x1, z.z1, col, 0.16));
       // Rand
@@ -186,7 +198,7 @@ export class Overlays {
     }
   }
   showZones(v, sideOnly = -1) {
-    this.zoneMeshes.forEach((g, i) => { g.visible = v && (sideOnly < 0 || sideOnly === i); });
+    this.zoneMeshes.forEach((g, i) => { g.visible = v && (sideOnly < 0 || sideOnly === Math.min(i, 1)); });
   }
 
   makeObjective() {
