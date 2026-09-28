@@ -1,5 +1,6 @@
 // Legionen, Formationen und einzelne Soldaten
 import { UNIT_TYPES, defaultOrders } from './data.js';
+import { initTactics } from './tactics.js';
 
 let NEXT_ID = 1;
 export function resetIds() { NEXT_ID = 1; }
@@ -69,6 +70,7 @@ export class Legion {
     this.soldiers = [];
     this.name = this.T.names[side];
     this.index = 0;
+    initTactics(this);
     this.buildSoldiers();
   }
 

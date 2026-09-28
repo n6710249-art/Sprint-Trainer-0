@@ -1,6 +1,7 @@
 // Schlachtsimulation: Bewegung, Nahkampf, Fernkampf, Sturmangriff, Rückzug, Ziele
 import { PathFinder } from './pathfind.js';
 import { clamp } from './rng.js';
+import { updateTactics, stateMods, frontage, braced, chargeShock, onCasualty, onLegionLost, hitMorale, float, speedFactor } from './tactics.js';
 
 const TAU = Math.PI * 2;
 const angDiff = (a, b) => {
@@ -101,7 +102,7 @@ export class Battle {
     const slow = Math.min(...plan.map((p) => p.L.T.speed));
     for (const p of plan) {
       const L = p.L;
-      if (L.state === 'retreat' || L.state === 'regroup') continue;
+      if (L.state === 'retreat' || L.state === 'regroup' || L.routed) continue;
       L.orders.move = 'path';
       L.orders.waypoints = [[p.x, p.z]];
       L.cmd = { x: p.x, z: p.z, face: p.face };
@@ -118,7 +119,7 @@ export class Battle {
 
   commandAttack(legs, E) {
     for (const L of legs) {
-      if (!L.alive || L.state === 'retreat') continue;
+      if (!L.alive || L.state === 'retreat' || L.routed) continue;
       this.clearCommand(L);
       L.orders.target = 'legion';
       L.orders.targetId = E.id;
@@ -233,6 +234,8 @@ export class Battle {
       if (e.state === 'retreat') s += 30;
       if (L.typeId === 'cavalry' && e.typeId === 'pike' && L.aiSmart) s += 45;
       if (L.aiSmart && e.inCastleCover) s += 20;
+      if (L.aiSmart && !L.isRanged && e.melee && e.melee.side === L.side) s -= 14; // gebundenen Feind in die Flanke nehmen
+      if (e.routed) s += 25;
       if (s < bs) { bs = s; best = e; }
     }
     return best;
@@ -272,12 +275,16 @@ export class Battle {
     this.thinkAcc += dt;
     const doThink = this.thinkAcc > 0.25;
     if (doThink) this.thinkAcc = 0;
-    for (const L of this.legions) {
+    // Reihenfolge jedes Mal mischen, damit keine Seite systematisch zuerst handelt
+    const order = this.order || (this.order = this.legions.slice());
+    for (let i = order.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; const t = order[i]; order[i] = order[j]; order[j] = t; }
+    for (const L of order) {
       if (!L.alive) continue;
       if (doThink) this.think(L);
       this.act(L, dt);
     }
     this.separate(dt);
+    updateTactics(this, dt);
     this.resolveVolleys();
     if (this.soldiersInStep !== false) for (const L of this.legions) this.updateSoldiers(L, dt);
     this.arrows = this.arrows.filter((a) => this.time < a.t0 + a.dur + 0.05);
@@ -296,7 +303,13 @@ export class Battle {
       const thr = o.retreatAt / (1 + L.retreated * 1.5);
       if (L.ratio <= thr) { this.startRetreat(L); return; }
     }
-    if (L.state === 'retreat' || L.state === 'regroup') return;
+    if (L.state === 'retreat' || L.state === 'regroup' || L.routed) return;
+
+    // Hit & Run: Reiter reiten nach dem Nahkampf Abstand, um erneut anzureiten
+    if (L.withdrawT > 0 && L.withdraw) {
+      this.moveTo(L, L.withdraw[0], L.withdraw[1], 'move');
+      return;
+    }
 
     // Nahkampf halten
     if (L.melee) {
@@ -383,9 +396,16 @@ export class Battle {
     else { L.state = 'idle'; L.path = []; }
   }
 
+  // Hochstand: Schützen auf erhöhter Position schießen weiter
+  rangeOf(L, t = null) {
+    const hl = this.map.getHeight(L.x, L.z);
+    const ht = t ? this.map.getHeight(t.x, t.z) : 1;
+    return L.T.range * (hl - ht > 2 ? 1.2 : 1);
+  }
+
   thinkRanged(L) {
     const o = L.orders;
-    const R = L.T.range;
+    const R = this.rangeOf(L);
     // Ausweichen vor Nahkämpfern
     if (o.skirmish && !L.moveOnly) {
       const threat = this.nearestEnemy(L, 9, (e) => !e.isRanged && e.state !== 'retreat');
@@ -481,19 +501,24 @@ export class Battle {
     L.melee = t;
     L.state = 'melee';
     L.path = [];
+    L.meleeT = 0;
     const d = dist(L, t) || 1;
     // Sturmangriff
     if (L.typeId === 'cavalry' && L.chargeReady && L.speedCur > L.T.speed * 0.55) {
       L.chargeReady = false;
       L.movedFast = 0;
-      if (t.typeId === 'pike' && t.state !== 'retreat') {
-        // Piken brechen den Angriff
-        this.damage(L, L.count * 1.1, t, false);
+      const fm0 = this.flankMult(L, t);
+      if (braced(t) && fm0 < 1.3) {
+        // Speerwall: frontal zerschellt der Angriff (von der Seite nicht!)
+        this.damage(L, L.count * 1.3, t, false);
+        hitMorale(this, L, 18);
+        float(this, t, 'SPEERWALL!', 'good', 4);
         this.events.push({ type: 'impact', x: (L.x + t.x) / 2, z: (L.z + t.z) / 2, big: false, broken: true });
       } else {
         L.chargeT = 2.8;
-        const fm = this.flankMult(L, t);
+        const fm = fm0;
         const wedge = L.orders.formation === 'wedge' ? 1.25 : 1;
+        chargeShock(this, L, t, fm);
         this.damage(t, L.count * 1.05 * fm * wedge, L, false);
         this.events.push({ type: 'impact', x: (L.x + t.x) / 2, z: (L.z + t.z) / 2, big: true });
         t.knock = { x: (t.x - L.x) / d, z: (t.z - L.z) / d, t: 0.5 };
@@ -506,16 +531,17 @@ export class Battle {
     this.events.push({ type: 'clash', x: (L.x + t.x) / 2, z: (L.z + t.z) / 2 });
   }
 
-  startRetreat(L) {
+  startRetreat(L, routing = false) {
     L.state = 'retreat';
     L.melee = null;
-    L.retreated++;
+    if (!routing) L.retreated++;
     L.target = null;
+    L.withdrawT = 0;
     let tx, tz;
     const o = L.orders;
     const camp = this.map.camps[L.side];
     tx = camp.x + (L.side === 0 ? 6 : -6); tz = camp.z;
-    if (o.retreatTo === 'ally') {
+    if (o.retreatTo === 'ally' && !routing) {
       let best = null, bd = 1e9;
       for (const a of this.alliesOf(L.side)) {
         if (a === L || a.state === 'retreat') continue;
@@ -545,6 +571,8 @@ export class Battle {
   act(L, dt) {
     L.lastHitT += dt;
     L.chargeT -= dt;
+    L.pilumCD -= dt;
+    if (L.withdrawT > 0) { L.withdrawT -= dt; if (L.withdrawT <= 0) L.withdraw = null; }
     if (L.knock) { L.knock.t -= dt; if (L.knock.t <= 0) L.knock = null; }
     const m = this.map;
     const T = L.T;
@@ -568,6 +596,18 @@ export class Battle {
           this.stepToward(L, t.x, t.z, desiredSpeed, dt);
         }
         this.dealMelee(L, t, dt);
+        L.meleeT += dt;
+        if (L.typeId === 'cavalry' && L.meleeT > 4.5 && L.orders.stance !== 'defensive' && L.stamina > 22
+          && !t.routed && t.state !== 'retreat' && !L.surrounded && !L.moveOnly) {
+          const dx = L.x - t.x, dz = L.z - t.z, dd = Math.hypot(dx, dz) || 1;
+          L.withdraw = this.snapFree(L.x + dx / dd * 18, L.z + dz / dd * 18, L.side);
+          L.withdrawT = 3.6;
+          L.melee = null;
+          if (t.melee === L) t.melee = null;
+          L.state = 'move';
+          L.path = this.pf.find(L.x, L.z, L.withdraw[0], L.withdraw[1], L.side, 4);
+          float(this, L, 'HIT & RUN', 'good', 6);
+        }
         break;
       }
       case 'shoot': {
@@ -575,13 +615,13 @@ export class Battle {
         if (!t || !t.alive) { L.state = 'idle'; break; }
         faceTo = t;
         const d = dist(L, t);
-        if (d > T.range * 1.05) { L.state = 'idle'; break; }
+        if (d > this.rangeOf(L, t) * 1.05) { L.state = 'idle'; break; }
         L.volleyT -= dt;
         if (L.volleyT <= 0) { this.fireVolley(L, t); L.volleyT = T.volley * (0.9 + Math.random() * 0.2); }
         break;
       }
       case 'retreat': {
-        desiredSpeed = T.speed * 1.12;
+        desiredSpeed = T.speed * (L.routed ? 1.2 : 1.12);
         if (this.followPath(L, desiredSpeed, dt)) {
           L.state = 'regroup';
           L.regroupT = 7;
@@ -594,6 +634,11 @@ export class Battle {
         const threat = this.nearestEnemy(L, 4);
         if (threat) { L.melee = threat; L.state = 'melee'; break; }
         if (L.regroupT <= 0) {
+          if (L.routed) {
+            if (L.morale < 40) { L.regroupT = 2; break; } // erst sammeln, wenn der Mut zurück ist
+            L.routed = false;
+            float(this, L, 'GESAMMELT', 'good', 5);
+          }
           L.holdX = L.x; L.holdZ = L.z;
           if (L.orders.afterRetreat === 'hold') { L.orders.move = 'hold'; }
           L.wp = []; L.wpIdx = 0;
@@ -606,7 +651,9 @@ export class Battle {
         desiredSpeed = T.speed;
         if (L.state === 'engage' && L.target && L.target.alive) {
           const t = L.target;
-          if (dist(L, t) < this.contactDist(L, t)) { this.startMelee(L, t); break; }
+          const gap = dist(L, t) - this.contactDist(L, t);
+          if (L.typeId === 'legion' && L.pilumCD <= 0 && gap < 8 && gap > 0.5 && !t.routed) this.throwPilum(L, t);
+          if (gap < 0) { this.startMelee(L, t); break; }
         }
         // Fernkämpfer: im Vorrücken schießen, wenn in Reichweite
         if (L.isRanged && L.target && L.target.alive && dist(L, L.target) < T.range * 0.95 && L.state !== 'kite') {
@@ -695,6 +742,31 @@ export class Battle {
     const d = Math.hypot(dx, dz);
     const tol = L.path.length === 1 ? (L.state === 'retreat' ? 3.5 : 1.8) : (L.blockCool > 0 ? 0.5 : 1.6);
     if (d < tol) { L.path.shift(); return L.path.length === 0; }
+    // Fortschrittswächter: kommt die Legion trotz Marsch nicht voran?
+    L.progT = (L.progT || 0) + dt;
+    if (L.progT > 1.2) {
+      const moved = L.progX === undefined ? 99 : Math.hypot(L.x - L.progX, L.z - L.progZ);
+      L.progX = L.x; L.progZ = L.z; L.progT = 0;
+      if (moved < 0.35) {
+        const goal = L.path[L.path.length - 1];
+        const gd = Math.hypot(goal[0] - L.x, goal[1] - L.z);
+        if (gd < 7) {
+          // nah genug: als angekommen werten (Haltepunkt/Wegpunkt auf die erreichbare Stelle legen)
+          L.path = [];
+          if (L.orders.move === 'hold' || L.state === 'move') { L.holdX = L.x; L.holdZ = L.z; }
+          if (L.wp && L.wpIdx < L.wp.length && Math.hypot(L.wp[L.wpIdx][0] - goal[0], L.wp[L.wpIdx][1] - goal[1]) < 3) L.wpIdx++;
+          if (L.cmd) { L.cmd.x = L.x; L.cmd.z = L.z; }
+          return true;
+        }
+        // sonst: freie Nachbarzelle anpeilen und neu planen
+        const k = this.pf.nearestFree(m.cellIndex(L.x + (Math.random() - 0.5) * 4, L.z + (Math.random() - 0.5) * 4), L.side);
+        const np = this.pf.find(L.x, L.z, goal[0], goal[1], L.side, 2);
+        if (k >= 0) np.unshift(m.cellCenter(k));
+        L.path = np;
+        L.blockCool = 1.2;
+        return false;
+      }
+    }
     dx /= d; dz /= d;
     // Vorausschau: kurz vor dem Wegpunkt schon in Richtung des nächsten einlenken
     if (L.path.length > 1 && d < 5) {
@@ -714,6 +786,7 @@ export class Battle {
     if (L.orders.formation === 'block') sp *= 0.9;
     if (L.orders.stance === 'aggressive') sp *= 1.05;
     if (L.groupSpeed && L.state !== 'retreat') sp = Math.min(sp, L.groupSpeed);
+    sp *= speedFactor(L);
     // Hang
     const h0 = m.getHeight(L.x, L.z), h1 = m.getHeight(L.x + dx * 2, L.z + dz * 2);
     if (h1 - h0 > 0.4) sp *= 0.8;
@@ -788,20 +861,24 @@ export class Battle {
     const fb = m.flagAt(B.x, B.z);
     if (fb & 2) def *= 0.75;
     if (ranged && (fb & 1)) def *= 1.6;
-    if (B.state === 'retreat') def *= 0.6;
+    if (B.state === 'retreat' && !B.routed) def *= 0.6;
     if (B.state === 'breach') def *= 0.85;
-    return [atk, def];
+    const [sa, sd] = stateMods(A, B);
+    return [atk * sa, def * sd];
   }
 
   dealMelee(A, B, dt) {
     const T = A.T;
     let [atk, def] = this.mods(A, B, false);
     if (A.typeId === 'pike' && B.typeId === 'cavalry') atk *= T.vsCav;
-    if (A.typeId === 'cavalry' && B.isRanged) atk *= 1.5;
+    if (A.typeId === 'cavalry' && (B.isRanged || B.routed || B.state === 'retreat')) atk *= 1.5; // Verfolger
     if (A.chargeT > 0) atk *= T.charge || 1;
-    atk *= this.flankMult(A, B);
+    const fm = this.flankMult(A, B);
+    atk *= fm;
+    if (B.typeId === 'pike' && fm > 1) atk *= 1.25; // Schwerfällig
     if (A.isRanged) atk *= 0.9;
-    const base = A.count * T.atk * 0.1 * atk;
+    // nur die vorderen Reihen kämpfen – wer von mehreren Seiten angreift, bringt mehr Männer ins Gefecht
+    const base = frontage(A) * T.atk * 0.14 * atk;
     const dmg = base / (1 + B.T.def * def * 0.22) * dt;
     this.damage(B, dmg, A, false);
     A.clashT = (A.clashT || 0) - dt;
@@ -814,15 +891,16 @@ export class Battle {
   fireVolley(A, B) {
     const T = A.T;
     const d = dist(A, B);
-    let acc = 0.46 - 0.24 * (d / T.range);
+    let acc = 0.46 - 0.24 * Math.min(1, d / T.range);
     if (B.melee) acc *= 0.75;
     const [atk, def] = this.mods(A, B, true);
     const n = A.count;
     const hits = n * acc;
-    const resist = B.T.arrowResist || 1;
+    let resist = B.T.arrowResist || 1;
+    if (B.typeId === 'legion' && B.orders.formation === 'block') resist *= 0.5; // Schildkröte
     const dmg = hits * T.arrowDmg * atk * resist / (1 + B.T.def * def * 0.12);
     const flight = 0.9 + d / 40;
-    this.volleys.push({ A, B, dmg, t: this.time + flight });
+    this.volleys.push({ A, B, dmg, t: this.time + flight, morale: hits * 0.45 }); // Brandpfeile
     // sichtbare Pfeile
     const shooters = A.soldiers.filter((s) => s.alive);
     const nArrows = Math.min(shooters.length, 18);
@@ -840,6 +918,23 @@ export class Battle {
     this.events.push({ type: 'volley', x: A.x, z: A.z });
   }
 
+  throwPilum(A, B) {
+    A.pilumCD = 30;
+    const d = dist(A, B);
+    const resist = (B.T.arrowResist || 1) * (B.typeId === 'legion' && B.orders.formation === 'block' ? 0.6 : 1);
+    const dmg = A.count * 1.0 * resist / (1 + B.T.def * 0.1);
+    const flight = 0.6 + d / 60;
+    this.volleys.push({ A, B, dmg, t: this.time + flight, morale: 8 });
+    const shooters = A.soldiers.filter((s) => s.alive);
+    for (let i = 0; i < Math.min(16, shooters.length); i++) {
+      const s = shooters[i];
+      this.arrows.push({ x0: s.x, y0: s.y + 1.6, z0: s.z, x1: B.x + (Math.random() - 0.5) * B.halfW * 1.6, z1: B.z + (Math.random() - 0.5) * 3, y1: this.map.getHeight(B.x, B.z) + 0.8,
+        t0: this.time + Math.random() * 0.15, dur: flight, arc: 2 + d * 0.12, pilum: true });
+    }
+    float(this, B, 'PILUM!', 'bad', 4);
+    this.events.push({ type: 'volley', x: A.x, z: A.z });
+  }
+
   resolveVolleys() {
     const t = this.time;
     for (let i = this.volleys.length - 1; i >= 0; i--) {
@@ -847,6 +942,7 @@ export class Battle {
       if (t >= v.t) {
         if (v.B.alive) {
           this.damage(v.B, v.dmg, v.A, true);
+          if (v.morale) hitMorale(this, v.B, v.morale);
           v.B.underFire = 1;
           this.events.push({ type: 'arrowhit', x: v.B.x, z: v.B.z });
         }
@@ -859,6 +955,7 @@ export class Battle {
     if (!B.alive || dmg <= 0) return;
     B.hp -= dmg;
     A.dealt += dmg;
+    B.dmgIn += dmg; A.dmgOut += dmg;
     B.lastHitT = 0;
     const newCount = Math.max(0, Math.ceil(B.hp / B.T.hp - 1e-6));
     let changed = false;
@@ -868,6 +965,7 @@ export class Battle {
       A.kills++;
       this.lost[B.side]++;
       changed = true;
+      onCasualty(this, B, A, byArrow);
       if (s) this.events.push({ type: 'death', x: s.x, z: s.z, side: B.side });
     }
     if (B.count <= 0) {
@@ -879,12 +977,13 @@ export class Battle {
         if (X.target === B) X.target = null;
       }
       this.events.push({ type: 'legionlost', side: B.side, legion: B });
+      onLegionLost(this, B);
     } else if (changed) B.reassign();
   }
 
   // ---------- Kollision zwischen Legionen ----------
   separate(dt) {
-    const Ls = this.legions.filter((l) => l.alive);
+    const Ls = this.order ? this.order.filter((l) => l.alive) : this.legions.filter((l) => l.alive);
     const m = this.map;
     const moving = (L) => L.state === 'move' || L.state === 'engage' || L.state === 'kite' || L.state === 'breach';
     for (let i = 0; i < Ls.length; i++) {
@@ -905,8 +1004,9 @@ export class Battle {
         } else {
           // Feinde, die sich berühren, kämpfen – statt sich gegenseitig wegzuschieben
           if (d < cd * 0.98) {
-            if (!A.melee && !A.isRanged) { this.startMelee(A, B); continue; }
-            if (!B.melee && !B.isRanged) { this.startMelee(B, A); continue; }
+            const [P, Q] = Math.random() < 0.5 ? [A, B] : [B, A];
+            if (!P.melee && !P.isRanged) { this.startMelee(P, Q); continue; }
+            if (!Q.melee && !Q.isRanged) { this.startMelee(Q, P); continue; }
           }
           need = cd * 0.95; strength = 4;
         }

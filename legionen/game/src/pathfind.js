@@ -97,7 +97,7 @@ export class PathFinder {
     heap.push(s, h(s));
     let found = false, iter = 0;
     let bestK = s, bestH = h(s);
-    while (heap.size && iter++ < 6000) {
+    while (heap.size && iter++ < 24000) {
       const k = heap.pop();
       if (C[k] === cur) continue;
       C[k] = cur;

@@ -76,7 +76,6 @@ export class BattleMap {
     if (sc === 'hill') {
       this.objective = { type: 'hill', x: r.range(-5, 5), z: r.range(-5, 5), r: 9, score: [0, 0], need: 100 };
     }
-    if (sc === 'hill' || sc === 'forest') this.hasWater = true; // kleine Teiche in Senken
     if (sc === 'castle' || this.castle) {
       this.hasWater = true; // Burggraben
     }
@@ -85,7 +84,7 @@ export class BattleMap {
     this.hilly = sc === 'canyon' ? 1 : r.range(0.55, 1.7) * (this.biome === 'highland' ? 1.35 : 1);
     this.freq = r.range(0.016, 0.03);
     this.features = this.pickFeatures();
-    if (this.features.some((f) => f.type === 'marsh' || f.type === 'lake')) this.hasWater = true;
+    if (this.features.some((f) => f.type === 'marsh' || f.type === 'lake' || f.type === 'pond')) this.hasWater = true;
 
     const hAt = (x, z) => this.heightFn(x, z);
     for (let j = 0; j < this.nz; j++) {
@@ -137,6 +136,15 @@ export class BattleMap {
       return !out.some((f) => Math.hypot(f.x - x, f.z - z) < f.rad + rr + 6);
     };
     const bag = pool.slice();
+    // dazu 0–2 kleine Teiche
+    const ponds = sc === 'river' ? r.int(0, 1) : r.int(0, 2);
+    for (let i = 0; i < ponds; i++) {
+      const rr = r.range(3.5, 5.5);
+      for (let t = 0; t < 40; t++) {
+        const x = r.range(xr[0], xr[1]), z = r.range(-42, 42);
+        if (ok(x, z, rr)) { out.push({ type: 'pond', x, z, rad: rr }); break; }
+      }
+    }
     for (let i = 0; i < n && bag.length; i++) {
       const type = bag.splice(r.int(0, Math.min(bag.length - 1, 3)), 1)[0];
       const rr = rad[type] * r.range(0.85, 1.2);
@@ -203,6 +211,12 @@ export class BattleMap {
           }
           break;
         }
+        case 'pond': {
+          const rr = f.rad * (1 + N(x * 0.12, z * 0.12 + 9) * 0.25);
+          const k = 1 - Math.max(0, Math.min(1, (d - rr * 0.5) / (rr * 0.5)));
+          if (k > 0) { h = h * (1 - k) + -1.8 * k; g = k > 0.6 ? G_BED : G_SAND; }
+          break;
+        }
         case 'lake': {
           const rr = f.rad * (1 + N(x * 0.07, z * 0.07 + 5) * 0.3);
           const k = 1 - Math.max(0, Math.min(1, (d - rr * 0.55) / (rr * 0.45)));
@@ -226,6 +240,9 @@ export class BattleMap {
     let h = N.fbm(x * fr, z * fr, 4) * 3.2 * (this.hilly || 1) + N(x * 0.09, z * 0.09) * 0.35;
     // Wüste: Dünenkämme
     if (this.biome === 'desert' && this.scenario !== 'canyon') h += Math.abs(N(x * 0.035 + z * 0.012, z * 0.02)) * 2.2 - 0.6;
+    // Senken im Grundgelände nicht unter Wasser sinken lassen – Wasser kommt nur aus Merkmalen
+    const floor = this.waterLevel + 0.45;
+    if (h < floor) h = floor + (h - floor) * 0.12;
     let g = G_GRASS;
     if (this.features && this.features.length) [h, g] = this.featureHeight(x, z, h, g);
 
@@ -484,6 +501,7 @@ export class BattleMap {
 
   buildNav() {
     const gw = this.gw, gd = this.gd;
+    this.waterBlocked = new Uint8Array(gw * gd);
     for (let j = 0; j < gd; j++) {
       for (let i = 0; i < gw; i++) {
         const k = j * gw + i;
@@ -497,9 +515,11 @@ export class BattleMap {
         if (i === 0 || j === 0 || i === gw - 1 || j === gd - 1) this.blocked[k] = 1;
         if (hi - lo > 2.6) this.blocked[k] = 1;
         if (this.scenario === 'canyon' && avg > 5) this.blocked[k] = 1;
-        if (this.hasWater && avg < this.waterLevel - 0.9) this.blocked[k] = 1;
-        if (this.hasWater && avg < this.waterLevel + 0.1 && avg >= this.waterLevel - 0.9) {
-          this.flags[k] |= 2; this.cost[k] += 1.6;
+        // Wasser ist unpassierbar – außer an ausgewiesenen Furten und in Sümpfen
+        if (this.hasWater && avg < this.waterLevel + 0.05) {
+          const cx = x0 + 1, cz = z0 + 1;
+          if (this.isFordZone(cx, cz) && avg > this.waterLevel - 1.2) { this.flags[k] |= 2; this.cost[k] += 1.6; }
+          else { this.blocked[k] = 1; this.waterBlocked[k] = 1; }
         }
       }
     }
@@ -584,7 +604,80 @@ export class BattleMap {
         });
       }
     }
+    this.ensureConnectivity();
     this.computeClearance();
+  }
+
+  // Sicherstellen, dass beide Heere zueinander finden – sonst eine seichte Furt durch das Wasser legen
+  flood(startK) {
+    const n = this.gw * this.gd, seen = new Uint8Array(n);
+    const q = [startK];
+    seen[startK] = 1;
+    while (q.length) {
+      const k = q.pop();
+      const i = k % this.gw, j = (k / this.gw) | 0;
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const a = i + di, b = j + dj;
+        if (a < 0 || b < 0 || a >= this.gw || b >= this.gd) continue;
+        const kk = b * this.gw + a;
+        if (seen[kk] || (this.blocked[kk] && !(this.flags[kk] & 8))) continue;
+        seen[kk] = 1; q.push(kk);
+      }
+    }
+    return seen;
+  }
+  freeCellNear(x, z) {
+    for (let r = 0; r < 12; r++) for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
+      const k = this.cellIndex(x + dx * CELL, z + dz * CELL);
+      if (k >= 0 && !this.blocked[k]) return k;
+    }
+    return -1;
+  }
+  ensureConnectivity() {
+    const zc = (zn) => [(zn.x0 + zn.x1) / 2, (zn.z0 + zn.z1) / 2];
+    let [ax, az] = zc(this.zones[0]);
+    let [bx, bz] = zc(this.zones[1]);
+    if (this.castle) {
+      // Angreifer-Zone -> Platz vor dem Burgtor
+      [ax, az] = zc(this.zones[1 - this.castle.owner]);
+      bx = this.gate.x + this.castle.face * 12; bz = this.gate.z;
+    }
+    // alle Teile beider Zonen müssen erreichbar sein
+    const targets = [[bx, bz]];
+    for (const zn of this.zones) for (const fz of [0.2, 0.5, 0.8]) targets.push([(zn.x0 + zn.x1) / 2, zn.z0 + (zn.z1 - zn.z0) * fz]);
+    for (const [tx, tz] of targets) this.connect(ax, az, tx, tz);
+  }
+  connect(ax, az, bx, bz) {
+    const ka = this.freeCellNear(ax, az);
+    for (let tries = 0; tries < 4; tries++) {
+      const kb = this.freeCellNear(bx, bz);
+      if (ka < 0 || kb < 0) return;
+      const seen = this.flood(ka);
+      if (seen[kb]) return;
+      // Furt entlang der Verbindungslinie (leicht versetzt je Versuch)
+      const off = [0, 14, -14, 26][tries];
+      const n = Math.ceil(Math.hypot(bx - ax, bz - az));
+      for (let t = 0; t <= n; t++) {
+        const x = ax + (bx - ax) * t / n, z = az + (bz - az) * t / n + off * Math.sin(Math.PI * t / n);
+        for (let w = -1; w <= 1; w++) {
+          const k = this.cellIndex(x, z + w * CELL);
+          if (k < 0 || !this.waterBlocked[k]) continue;
+          this.waterBlocked[k] = 0; this.blocked[k] = 0;
+          this.flags[k] |= 2; this.cost[k] += 1.6;
+          this.raiseCell(k, this.waterLevel - 0.3);
+        }
+      }
+    }
+  }
+  raiseCell(k, h) {
+    const [cx, cz] = this.cellCenter(k);
+    const { EXT_X, EXT_Z, STEP } = this.extent;
+    const i0 = Math.floor((cx - 1.8 + EXT_X) / STEP), i1 = Math.ceil((cx + 1.8 + EXT_X) / STEP);
+    const j0 = Math.floor((cz - 1.8 + EXT_Z) / STEP), j1 = Math.ceil((cz + 1.8 + EXT_Z) / STEP);
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const idx = j * this.nx + i;
+      if (idx >= 0 && idx < this.heights.length && this.heights[idx] < h) { this.heights[idx] = h; this.ground[idx] = G_SAND; }
+    }
   }
 
   makeForests() {
@@ -606,7 +699,7 @@ export class BattleMap {
 
   nearStructure(x, z, d) {
     for (const f of this.features || []) {
-      if ((f.type === 'village' || f.type === 'lake' || f.type === 'pillars' || f.type === 'ruins') && Math.hypot(x - f.x, z - f.z) < f.rad + d) return true;
+      if ((f.type === 'village' || f.type === 'lake' || f.type === 'pond' || f.type === 'pillars' || f.type === 'ruins') && Math.hypot(x - f.x, z - f.z) < f.rad + d) return true;
     }
     if (this.castle && Math.max(Math.abs(x - this.castle.cx), Math.abs(z - this.castle.cz)) < this.castle.half + 9 + d * 0.3) return true;
     for (const b of this.bridges) if (Math.hypot(x - b.x, z - b.z) < d + b.len / 2) return true;
@@ -801,6 +894,14 @@ export class BattleMap {
       }
     }
   }
+  isFordZone(x, z) {
+    if (this.fords && this.river) {
+      for (const fz of this.fords) if (Math.abs(z - fz) < 5 && Math.abs(x - this.riverX(z)) < this.river.half + 4) return true;
+    }
+    for (const f of this.features || []) if (f.type === 'marsh' && Math.hypot(x - f.x, z - f.z) < f.rad * 1.35) return true;
+    return false;
+  }
+
   // Räumliches Raster der Baumstämme im Spielfeld (Zellen 4×4)
   buildTreeHash() {
     const W = 42, D = 30;

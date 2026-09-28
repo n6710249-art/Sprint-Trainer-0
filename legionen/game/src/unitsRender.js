@@ -1,6 +1,6 @@
 // Instanziertes Rendering aller Soldaten + Feldzeichen + Effekte (Funken, Staub, Pfeile)
 import * as THREE from 'three';
-import { FACTIONS } from './data.js';
+import { FACTIONS, ACCENTS } from './data.js';
 import { buildPartGeometries, partsFor } from './models.js';
 
 const _base = new THREE.Matrix4();
@@ -47,23 +47,38 @@ export class UnitRenderer {
       this.counters[g] = 0;
       this.group.add(m);
     }
-    // Indizes + Farben zuweisen
+    // Indizes + Farben + Varianten zuweisen
     for (const L of legions) {
       const def = this.defs[L.side + ':' + L.typeId];
-      const pal = FACTIONS[L.side].colors;
-      for (const s of L.soldiers) {
+      const pal = { ...FACTIONS[L.side].colors, accent: ACCENTS[L.side][L.index % ACCENTS[L.side].length] };
+      L.accent = pal.accent;
+      const groups = {};
+      for (const p of def) if (p.v) groups[p.v[0]] = Math.max(groups[p.v[0]] || 0, p.v[1] + 1);
+      L.soldiers.forEach((s, si) => {
         s.pi = [];
+        s.vis = [];
+        const officer = si === 0;
+        const pick = {};
+        for (const g in groups) pick[g] = (Math.random() * (groups[g] + (g === 'helm' ? 1 : 0))) | 0; // Helm: auch schlicht möglich
+        const roleChoice = (Math.random() * 3) | 0;
         const tint = 0.9 + Math.random() * 0.14;
         for (const p of def) {
           const idx = this.counters[p.g]++;
           s.pi.push(idx);
-          _c.setHex(pal[p.role] ?? 0xff00ff);
-          const vary = p.role === 'skin' || p.role === 'horse' ? 0.82 + Math.random() * 0.3 : tint;
+          let vis = true;
+          if (p.off && !officer) vis = false;
+          if (p.noOff && officer) vis = false;
+          if (p.v && pick[p.v[0]] !== p.v[1]) vis = false;
+          if (p.chance !== undefined && !officer && Math.random() > p.chance) vis = false;
+          s.vis.push(vis);
+          const role = Array.isArray(p.role) ? p.role[roleChoice % p.role.length] : p.role;
+          _c.setHex(pal[role] ?? 0xff00ff);
+          const vary = role === 'skin' || role.startsWith('horse') ? 0.82 + Math.random() * 0.3 : role === 'accent' ? 1 : tint;
           _c.multiplyScalar(vary);
           this.meshes[p.g].setColorAt(idx, _c);
         }
         s.colored = true;
-      }
+      });
     }
     for (const g in this.meshes) if (this.meshes[g].instanceColor) this.meshes[g].instanceColor.needsUpdate = true;
 
@@ -75,7 +90,7 @@ export class UnitRenderer {
       const g = new THREE.Group();
       const pole = new THREE.Mesh(this.geos.pole, poleMat);
       g.add(pole);
-      const topMat = new THREE.MeshLambertMaterial({ color: L.side === 0 ? 0xe3b441 : 0x2b2b30, flatShading: true });
+      const topMat = new THREE.MeshLambertMaterial({ color: ACCENTS[L.side][L.index % ACCENTS[L.side].length], flatShading: true });
       const top = new THREE.Mesh(this.geos.eagle, topMat);
       g.add(top);
       const flagGeo = new THREE.PlaneGeometry(1.3, 1.6, 3, 1);
@@ -145,6 +160,7 @@ export class UnitRenderer {
         const w = s.walk * (mounted ? 0.9 : 1.4);
         for (let i = 0; i < def.length; i++) {
           const p = def[i];
+          if (!s.vis[i]) { if (!s.hid) this.meshes[p.g].setMatrixAt(s.pi[i], HIDE); continue; }
           let rx = p.r[0], ry = p.r[1], rz = p.r[2];
           let px = p.p[0], py = p.p[1], pz = p.p[2];
           if (!dead) {
@@ -178,6 +194,7 @@ export class UnitRenderer {
           _out.multiplyMatrices(_base, _loc);
           this.meshes[p.g].setMatrixAt(s.pi[i], _out);
         }
+        s.hid = true;
         if (dead && !s.darkened) {
           s.darkened = true;
           for (let i = 0; i < def.length; i++) {

@@ -77,6 +77,31 @@ export function buildPartGeometries() {
   G.mane = merge([xf(box(0.1, 0.62, 0.36), 0, 0.55, 0.62, -0.55), xf(box(0.14, 0.52, 0.14), 0, 0.02, -0.82, 0.5)]);
   G.saddle = merge([xf(box(0.66, 0.36, 0.72), 0, 0.12, -0.02), xf(box(0.3, 0.1, 0.4), 0, 0.33, -0.05)]);
   G.hleg = merge([xf(box(0.13, 0.8, 0.14), 0.18, -0.4, 0), xf(box(0.13, 0.8, 0.14), -0.18, -0.4, 0)]);
+  // --- Details für interessantere Skins ---
+  G.crestT = xf(box(0.5, 0.16, 0.07), 0, 0.27, 0); // Querkamm des Centurio
+  G.cheeks = merge([xf(box(0.04, 0.16, 0.12), 0.18, -0.08, 0.06), xf(box(0.04, 0.16, 0.12), -0.18, -0.08, 0.06)]);
+  G.emblemWing = merge([
+    xf(box(0.46, 0.05, 0.02), 0.1, 0.12, 0.05, 0, 0, 0.55), xf(box(0.46, 0.05, 0.02), -0.1, 0.12, 0.05, 0, 0, -0.55),
+    xf(box(0.46, 0.05, 0.02), 0.1, -0.12, 0.05, 0, 0, -0.55), xf(box(0.46, 0.05, 0.02), -0.1, -0.12, 0.05, 0, 0, 0.55),
+    xf(box(0.05, 0.8, 0.02), 0, 0, 0.05),
+  ]);
+  G.shieldRim = merge([xf(box(0.66, 0.05, 0.1), 0, 0.48, 0), xf(box(0.66, 0.05, 0.1), 0, -0.48, 0), xf(box(0.05, 0.98, 0.1), 0.32, 0, 0), xf(box(0.05, 0.98, 0.1), -0.32, 0, 0)]);
+  G.emblemCross = merge([xf(box(0.62, 0.09, 0.02), 0, 0, 0.045), xf(box(0.09, 0.62, 0.02), 0, 0, 0.045)]);
+  G.emblemHalf = xf(prep(new THREE.CircleGeometry(0.34, 8, 0, Math.PI)), 0, 0, 0.042);
+  G.roundRim = xf(prep(new THREE.TorusGeometry(0.34, 0.035, 3, 10)), 0, 0, 0.02);
+  G.fur = xf(ico(0.36, 0), 0, 0, -0.03, 0, 0, 0, 1.25, 0.42, 1.05);
+  G.beard = merge([xf(box(0.22, 0.2, 0.1), 0, -0.1, 0.12), xf(box(0.12, 0.14, 0.08), 0, -0.24, 0.12)]);
+  G.braids = merge([xf(box(0.06, 0.34, 0.06), 0.16, -0.14, -0.08), xf(box(0.06, 0.34, 0.06), -0.16, -0.14, -0.08)]);
+  G.wings = merge([xf(box(0.04, 0.32, 0.2), 0.2, 0.12, -0.04, 0, 0, -0.35), xf(box(0.04, 0.32, 0.2), -0.2, 0.12, -0.04, 0, 0, 0.35)]);
+  G.pauldrons = merge([xf(ico(0.14, 0), 0.3, 0, 0, 0, 0, 0, 1.2, 0.8, 1.1), xf(ico(0.14, 0), -0.3, 0, 0, 0, 0, 0, 1.2, 0.8, 1.1)]);
+  G.belt = xf(cyl(0.225, 0.225, 0.07, 7), 0, 0, 0);
+  G.scarf = xf(prep(new THREE.TorusGeometry(0.15, 0.05, 3, 8)), 0, 0, 0, Math.PI / 2);
+  G.arrows = merge([0, 1, 2, 3].map((i) => xf(box(0.02, 0.22, 0.02), (i % 2 - 0.5) * 0.06, 0.36, (i > 1 ? 0.03 : -0.03))));
+  G.barding = merge([xf(box(0.66, 0.46, 1.25), 0, -0.06, 0), xf(box(0.3, 0.3, 0.3), 0, 0.3, 0.8, -0.55)]);
+  G.bardingTrim = xf(box(0.68, 0.08, 1.27), 0, -0.3, 0);
+  G.horsePlume = xf(cone(0.07, 0.3, 4), 0, 1.02, 1.0, 0.3);
+  G.wolfPelt = xf(ico(0.4, 0), 0, 0.3, -0.35, 0, 0, 0, 1.2, 0.35, 1.3);
+
   // Feldzeichen
   G.pole = xf(cyl(0.04, 0.04, 3.4, 4), 0, 1.7, 0);
   G.eagle = merge([xf(ico(0.14, 0), 0, 3.55, 0), xf(box(0.5, 0.08, 0.1), 0, 3.6, 0, 0, 0, 0.3), xf(box(0.5, 0.08, 0.1), 0, 3.6, 0, 0, 0, -0.3)]);
@@ -84,59 +109,99 @@ export function buildPartGeometries() {
 }
 
 // Teile-Liste je Fraktion & Typ.  anim: legL/legR (Gehen), arm (Waffe), bow, hlegF/hlegB, none
+// Optionen je Teil: v: [Gruppe, Variante] (pro Soldat eine Variante je Gruppe), off: nur Offizier,
+// noOff: nicht beim Offizier, chance: Wahrscheinlichkeit, role darf ein Array sein (zufällig je Soldat)
 export function partsFor(side, type) {
   const roman = side === 0;
   const P = [];
-  const add = (g, role, px, py, pz, anim = 'none', rx = 0, ry = 0, rz = 0) => P.push({ g, role, p: [px, py, pz], anim, r: [rx, ry, rz] });
+  const add = (g, role, px, py, pz, anim = 'none', rx = 0, ry = 0, rz = 0, opt = {}) => P.push({ g, role, p: [px, py, pz], anim, r: [rx, ry, rz], ...opt });
   const mounted = type === 'cavalry';
   const Y = mounted ? 0.95 : 0; // Sitzhöhe
+  const tunic = roman ? 'primary' : ['primary', 'tunic2', 'tunic3'];
   if (mounted) {
-    add('horse', 'horse', 0, 1.15, 0, 'horse');
+    add('horse', roman ? 'horse' : ['horse', 'horse2'], 0, 1.15, 0, 'horse');
     add('mane', 'mane', 0, 1.15, 0, 'horse');
     add('saddle', 'primary', 0, 1.47, -0.05, 'horse');
-    add('hleg', 'horse', 0, 0.85, 0.55, 'hlegF');
-    add('hleg', 'horse', 0, 0.85, -0.55, 'hlegB');
+    if (roman) {
+      add('barding', 'primary', 0, 1.15, 0, 'horse');
+      add('bardingTrim', 'accent', 0, 1.15, 0, 'horse');
+      add('horsePlume', 'accent', 0, 1.15, 0, 'horse');
+    } else add('wolfPelt', 'fur', 0, 1.15, 0, 'horse');
+    add('hleg', roman ? 'horse' : ['horse', 'horse2'], 0, 0.85, 0.55, 'hlegF');
+    add('hleg', roman ? 'horse' : ['horse', 'horse2'], 0, 0.85, -0.55, 'hlegB');
     add('leg', 'dark', 0.3, 0.78 + Y, 0.05, 'ride', -1.2, 0, 0.35);
     add('leg', 'dark', -0.3, 0.78 + Y, 0.05, 'ride', -1.2, 0, -0.35);
   } else {
     add('leg', 'dark', 0.11, 0.78, 0, 'legL');
     add('leg', 'dark', -0.11, 0.78, 0, 'legR');
   }
-  const torsoRole = type === 'archer' ? (roman ? 'hood' : 'cloth') : 'primary';
+  const torsoRole = type === 'archer' ? (roman ? 'hood' : ['cloth', 'tunic3']) : tunic;
   add('torso', torsoRole, 0, 1.08 + Y, 0);
   if (type !== 'archer') add('skirt', roman ? 'primary' : 'dark', 0, 0.8 + Y, 0);
-  if (type === 'legion' || type === 'guard' || type === 'cavalry' || type === 'pike') add('chest', 'metal', 0, 1.08 + Y, 0);
+  add('belt', roman ? 'leather' : 'dark', 0, 0.86 + Y, 0);
+  if (type === 'legion' || type === 'guard' || type === 'cavalry' || type === 'pike') add('chest', 'metal', 0, 1.08 + Y, 0, 'none', 0, 0, 0, { noOff: roman });
+  if (roman && type !== 'archer') add('chest', 'silver', 0, 1.08 + Y, 0, 'none', 0, 0, 0, { off: true });
+  if (type === 'guard' || (roman && type === 'legion')) add('pauldrons', 'metal', 0, 1.34 + Y, 0);
   add('head', 'skin', 0, 1.56 + Y, 0);
+  if (!roman) {
+    add('beard', ['hairB', 'hairR', 'hairG'], 0, 1.56 + Y, 0, 'none', 0, 0, 0, { chance: 0.75 });
+    add('braids', ['hairB', 'hairR', 'hairG'], 0, 1.56 + Y, 0, 'none', 0, 0, 0, { chance: 0.4 });
+    if (type !== 'archer') add('fur', ['fur', 'furL'], 0, 1.36 + Y, 0, 'none', 0, 0, 0, { chance: type === 'guard' ? 1 : 0.6 });
+  }
   if (type === 'archer') {
-    add('hood', roman ? 'hood' : 'cloth', 0, 1.62 + Y, 0);
-    add('quiver', 'wood', -0.1, 1.2 + Y, -0.22);
+    add('hood', roman ? 'hood' : ['cloth', 'fur'], 0, 1.62 + Y, 0);
+    add('scarf', 'accent', 0, 1.42 + Y, 0);
+    add('quiver', 'leather', -0.1, 1.2 + Y, -0.22, 'none', 0.35);
+    add('arrows', 'cloth', -0.1, 1.2 + Y, -0.22, 'none', 0.35);
     add('bow', 'wood', 0.3, 1.25 + Y, 0.32, 'bow');
   } else if (roman) {
     add('helmRoman', 'helm', 0, 1.6 + Y, 0);
-    if (type === 'guard' || type === 'cavalry') add('plume', 'crest', 0, 1.6 + Y, 0);
-    else add('crest', 'crest', 0, 1.6 + Y, 0);
+    add('cheeks', 'helm', 0, 1.6 + Y, 0);
+    if (type === 'guard' || type === 'cavalry') add('plume', 'crest', 0, 1.6 + Y, 0, 'none', 0, 0, 0, { noOff: true });
+    else add('crest', 'crest', 0, 1.6 + Y, 0, 'none', 0, 0, 0, { noOff: true });
+    add('crestT', 'accent', 0, 1.6 + Y, 0, 'none', 0, 0, 0, { off: true }); // Centurio
   } else {
     add('helmCone', 'helm', 0, 1.72 + Y, 0);
-    if (type !== 'pike') add('horns', 'crest', 0, 1.68 + Y, 0);
+    // Helmschmuck variiert: Hörner, Flügel oder schlicht
+    add('horns', 'crest', 0, 1.68 + Y, 0, 'none', 0, 0, 0, { v: ['helm', 0] });
+    add('wings', 'accent', 0, 1.68 + Y, 0, 'none', 0, 0, 0, { v: ['helm', 1] });
+    add('horns', 'crest', 0, 1.68 + Y, 0, 'none', 0, 0, 0, { off: true });
   }
   // Schilde & Waffen
   switch (type) {
     case 'legion':
-      if (roman) { add('scutum', 'primary', 0.34, 1.02, 0.24, 'shield'); add('boss', 'secondary', 0.34, 1.02, 0.29, 'shield'); add('sword', 'metal', -0.34, 1.12, 0.1, 'arm'); }
-      else { add('round', 'primary', 0.36, 1.1, 0.22, 'shield'); add('boss', 'metal', 0.36, 1.1, 0.27, 'shield'); add('axe', 'metal', -0.34, 1.12, 0.1, 'arm'); }
+      if (roman) {
+        add('scutum', 'primary', 0.34, 1.02, 0.24, 'shield');
+        add('shieldRim', 'secondary', 0.34, 1.02, 0.24, 'shield');
+        add('emblemWing', 'accent', 0.34, 1.02, 0.24, 'shield');
+        add('boss', 'secondary', 0.34, 1.02, 0.29, 'shield');
+        add('sword', 'metal', -0.34, 1.12, 0.1, 'arm');
+        add('cape', 'crest', 0, 1.36, -0.2, 'none', 0, 0, 0, { chance: 0.35 });
+      } else {
+        add('round', 'primary', 0.36, 1.1, 0.22, 'shield');
+        add('emblemCross', 'accent', 0.36, 1.1, 0.22, 'shield', 0, 0, 0, { v: ['shield', 0] });
+        add('emblemHalf', 'accent', 0.36, 1.1, 0.22, 'shield', 0, 0, 0, { v: ['shield', 1] });
+        add('roundRim', 'wood', 0.36, 1.1, 0.22, 'shield');
+        add('boss', 'metal', 0.36, 1.1, 0.27, 'shield');
+        add('axe', 'metal', -0.34, 1.12, 0.1, 'arm');
+      }
       break;
     case 'pike':
       add('buckler', roman ? 'secondary' : 'primary', 0.32, 1.12, 0.2, 'shield');
+      if (!roman) add('emblemCross', 'accent', 0.32, 1.12, 0.2, 'shield', 0, 0, 0, { chance: 0.5 });
       add('pike', 'wood', -0.28, 1.2, 0, 'pike');
       break;
     case 'guard':
       add('tower', 'primary', 0.36, 1.05, 0.26, 'shield');
       add('towerRim', 'secondary', 0.36, 1.05, 0.26, 'shield');
+      add('emblemWing', 'accent', 0.36, 1.05, 0.27, 'shield');
       add('sword', 'metal', -0.34, 1.12, 0.1, 'arm');
-      add('cape', roman ? 'crest' : 'dark', 0, 1.36, -0.2);
+      add('cape', roman ? 'crest' : 'fur', 0, 1.36, -0.2);
       break;
     case 'cavalry':
       add('round', 'primary', 0.36, 1.1 + Y, 0.05, 'shield');
+      add('roundRim', 'accent', 0.36, 1.1 + Y, 0.05, 'shield');
+      if (!roman) add('emblemHalf', 'accent', 0.36, 1.1 + Y, 0.05, 'shield');
       add('spear', 'wood', -0.32, 1.2 + Y, 0, 'lance');
       add('cape', roman ? 'crest' : 'primary', 0, 1.36 + Y, -0.2);
       break;

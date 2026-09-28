@@ -42,7 +42,7 @@ for (const sc of SCENARIO_ORDER) {
         hist.set(L, h);
         if (b.time - h.t > 5) {
           stuck++; byState[L.state] = (byState[L.state] || 0) + 1;
-          if (process.env.V) console.log(`  ${sc} r${r} t=${b.time.toFixed(0)} ${L.side}${L.typeId} ${L.state} at ${L.x.toFixed(1)},${L.z.toFixed(1)} path=${L.path.length} melee=${!!L.melee}` + (process.env.DBG ? ` next=${JSON.stringify(L.path.slice(0,3).map(p=>p.map(v=>+v.toFixed(1))))} spd=${L.speedCur.toFixed(2)} pass=${map.isPassable(L.x,L.z,L.side)} near=${b.legions.filter(o=>o!==L&&o.alive&&Math.hypot(o.x-L.x,o.z-L.z)<10).map(o=>o.side+o.typeId+':'+o.state).join(',')}` : ''));
+          if (process.env.V) console.log(`  ${sc} r${r} t=${b.time.toFixed(0)} ${L.side}${L.typeId} ${L.state} at ${L.x.toFixed(1)},${L.z.toFixed(1)} path=${L.path.length} melee=${!!L.melee}` + (process.env.DBG ? ` next=${JSON.stringify(L.path.slice(0,3).map(p=>p.map(v=>+v.toFixed(1))))} spd=${L.speedCur.toFixed(2)} hold=${L.holdX.toFixed(1)},${L.holdZ.toFixed(1)} mv=${L.orders.move} wp=${L.wp&&L.wpIdx}/${L.wp&&L.wp.length} pass=${map.isPassable(L.x,L.z,L.side)} near=${b.legions.filter(o=>o!==L&&o.alive&&Math.hypot(o.x-L.x,o.z-L.z)<10).map(o=>o.side+o.typeId+':'+o.state).join(',')}` : ''));
           hist.set(L, { x: L.x, z: L.z, t: b.time });
         }
       }

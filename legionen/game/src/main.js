@@ -105,6 +105,13 @@ function disposeBattle() {
 // =====================================================================
 // Legionsschilder
 // =====================================================================
+// Statussymbol: Flucht/Wanken/Erschöpfung haben Vorrang vor dem Zustand
+function glyphOf(L) {
+  if (L.routed) return '⚑';
+  if (L.morale < 30) return '⚠';
+  if (L.stamina < 12) return '💤';
+  return STATE_GLYPH[L.state] || '';
+}
 function legionTitle(L) { return `${ROMAN[L.index] || L.index + 1}. ${L.name}`; }
 
 function createLabels(B) {
@@ -113,10 +120,10 @@ function createLabels(B) {
   for (const L of B.legions) {
     const el = document.createElement('div');
     el.className = 'lbl' + (L.side === 1 ? ' e' : '');
-    el.innerHTML = `<div class="plate">${unitIcon(L.typeId, L.side)}<span class="n">${ROMAN[L.index]}</span><span class="c">${L.count}</span><span class="s"></span></div><div class="hpb"><i></i></div>`;
+    el.innerHTML = `<div class="plate">${unitIcon(L.typeId, L.side)}<span class="n">${ROMAN[L.index]}</span><span class="c">${L.count}</span><span class="s"></span></div><div class="hpb"><i></i></div><div class="mob"><i></i></div>`;
     el.addEventListener('pointerdown', (e) => { e.stopPropagation(); onPointerDown(e, L); });
     root.appendChild(el);
-    B.labels.set(L, { el, c: el.querySelector('.c'), s: el.querySelector('.s'), hp: el.querySelector('.hpb i'), lastC: -1, lastS: '' });
+    B.labels.set(L, { el, c: el.querySelector('.c'), s: el.querySelector('.s'), hp: el.querySelector('.hpb i'), mo: el.querySelector('.mob i'), lastC: -1, lastS: '', lastM: -1 });
   }
   if (B.map.gate) {
     const el = document.createElement('div');
@@ -139,8 +146,16 @@ function updateLabels(B) {
     lb.el.style.display = '';
     lb.el.style.transform = `translate(${_pp.x.toFixed(1)}px, ${_pp.y.toFixed(1)}px) translate(-50%, -100%)`;
     if (lb.lastC !== L.count) { lb.c.textContent = L.count; lb.hp.style.width = (L.ratio * 100).toFixed(0) + '%'; lb.lastC = L.count; }
-    const st = G.phase === 'battle' ? (STATE_GLYPH[L.state] || '') : '';
+    const st = G.phase === 'battle' ? glyphOf(L) : '';
     if (lb.lastS !== st) { lb.s.textContent = st; lb.lastS = st; }
+    const mo = Math.round(L.morale / 5) * 5;
+    if (lb.lastM !== mo) {
+      lb.lastM = mo;
+      lb.mo.style.width = mo + '%';
+      lb.mo.style.background = mo < 30 ? '#ff6a4a' : mo < 60 ? '#f0c040' : '#8fd0ff';
+      lb.el.classList.toggle('waver', L.morale < 30 && !L.routed);
+    }
+    lb.el.classList.toggle('rout', !!L.routed);
     const sel = isSel(L) && L.side === 0 || G.selected === L;
     const tgt = G.selected && G.selected.side === 0 && G.selected.orders.target === 'legion' && G.selected.orders.targetId === L.id;
     lb.el.classList.toggle('sel', sel);
@@ -219,7 +234,7 @@ function renderSetup() {
   $('#type-grid').innerHTML = TYPE_ORDER.map((id) => {
     const T = UNIT_TYPES[id];
     const bars = Object.entries(T.stats).map(([k, v]) => `<span>${k}</span><div class="bar"><i style="width:${v * 20}%"></i></div>`).join('');
-    return `<div class="tcard" data-t="${id}">${unitIcon(id, 0)}<div><b>${T.names[0]} <span style="color:var(--muted);font-weight:400;font-size:11px">· ${T.size} Mann</span></b><small>${T.desc[0]}</small></div><div class="bars">${bars}</div></div>`;
+    return `<div class="tcard" data-t="${id}">${unitIcon(id, 0)}<div><b>${T.names[0]} <span style="color:var(--muted);font-weight:400;font-size:11px">· ${T.size} Mann</span></b><small>${T.desc[0]}</small><div class="tperks">${T.perks.map((p) => `<span title="${p.desc}">${p.icon} ${p.name}</span>`).join('')}</div></div><div class="bars">${bars}</div></div>`;
   }).join('');
   store.set('cfg', c);
 }
@@ -405,8 +420,8 @@ $('#actions').addEventListener('click', (e) => {
 function renderRoster() {
   const B = G.cur;
   const r = $('#roster');
-  r.innerHTML = B.player.map((L, i) => `<div class="lchip" data-l="${i}">${unitIcon(L.typeId, 0)}<div class="t"><b>${ROMAN[L.index]}. ${L.name}</b><span class="cnt">${L.count}/${L.maxCount}</span></div><span class="st"></span><div class="hp"><i style="width:${L.ratio * 100}%"></i></div></div>`).join('');
-  G.rosterEls = $$('#roster .lchip').map((el) => ({ el, cnt: el.querySelector('.cnt'), st: el.querySelector('.st'), hp: el.querySelector('.hp i') }));
+  r.innerHTML = B.player.map((L, i) => `<div class="lchip" data-l="${i}">${unitIcon(L.typeId, 0)}<div class="t"><b>${ROMAN[L.index]}. ${L.name}</b><span class="cnt">${L.count}/${L.maxCount}</span></div><span class="st"></span><div class="hp"><i style="width:${L.ratio * 100}%"></i></div><div class="hp mo"><i></i></div></div>`).join('');
+  G.rosterEls = $$('#roster .lchip').map((el) => ({ el, cnt: el.querySelector('.cnt'), st: el.querySelector('.st'), hp: el.querySelector('.hp i'), mo: el.querySelector('.hp.mo i') }));
   updateRoster();
 }
 function updateRoster() {
@@ -419,7 +434,8 @@ function updateRoster() {
     r.el.classList.toggle('dead', !L.alive);
     r.cnt.textContent = `${L.count}/${L.maxCount}`;
     r.hp.style.width = (L.ratio * 100).toFixed(0) + '%';
-    const st = G.phase === 'battle' ? (STATE_GLYPH[L.state] || '') : (L.orders.delay ? '⏳' : '');
+    const st = G.phase === 'battle' ? glyphOf(L) : (L.orders.delay ? '⏳' : '');
+    if (r.mo) { r.mo.style.width = L.morale.toFixed(0) + '%'; r.mo.style.background = L.morale < 30 ? '#ff6a4a' : L.morale < 60 ? '#f0c040' : '#8fd0ff'; }
     r.st.textContent = st;
     r.st.style.display = st ? '' : 'none';
   });
@@ -526,6 +542,7 @@ function openOrders(L) {
   $('#oh-name').textContent = legionTitle(L);
   const T = UNIT_TYPES[L.typeId];
   $('#oh-sub').textContent = `${L.count}/${L.maxCount} Mann · ${T.desc[0]}`;
+  $('#oh-perks').innerHTML = T.perks.map((p, i) => `<button class="perk" data-perk="${i}">${p.icon} ${p.name}</button>`).join('');
   for (const b of $$('#tabs button')) b.classList.toggle('on', b.dataset.tab === G.tab);
   renderTab(L);
   renderActions();
@@ -557,6 +574,12 @@ function renderTab(L) {
   }).join('');
 }
 
+$('#oh-perks').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-perk]');
+  if (!b || !G.selected) return;
+  const p = G.selected.T.perks[+b.dataset.perk];
+  toast(`${p.icon} ${p.name}: ${p.desc}`, 4200);
+});
 $('#tabs').addEventListener('click', (e) => {
   const b = e.target.closest('[data-tab]');
   if (!b || !G.selected) return;
@@ -980,10 +1003,12 @@ function updateHud() {
   updateRoster();
   if (G.selected && $('#orders').classList.contains('show')) {
     const L = G.selected;
-    $('#oh-sub').textContent = L.alive ? `${L.count}/${L.maxCount} Mann · ${stateText(L)}` : 'Vernichtet';
+    $('#oh-sub').textContent = L.alive ? `${L.count}/${L.maxCount} Mann · Moral ${L.morale.toFixed(0)}% · Ausdauer ${L.stamina.toFixed(0)}% · ${stateText(L)}` : 'Vernichtet';
   }
 }
 function stateText(L) {
+  if (L.routed) return 'FLIEHT – nicht steuerbar';
+  if (L.morale < 30) return 'wankt!';
   return { melee: 'im Nahkampf', shoot: 'schießt', retreat: 'zieht sich zurück', regroup: 'sammelt sich', wait: 'wartet auf Signal', hold: 'hält Stellung', move: 'marschiert', engage: 'rückt vor', kite: 'weicht aus', breach: 'berennt das Tor', idle: 'bereit', dead: 'vernichtet' }[L.state] || L.state;
 }
 
@@ -997,12 +1022,29 @@ function feed(text, side = -1) {
   setTimeout(() => d.remove(), 6000);
 }
 let toastT = 0;
-function toast(t) {
+function toast(t, ms = 1900) {
   const el = $('#toast');
   el.textContent = t;
   el.classList.add('show');
   clearTimeout(toastT);
-  toastT = setTimeout(() => el.classList.remove('show'), 1900);
+  toastT = setTimeout(() => el.classList.remove('show'), ms);
+}
+// aufsteigende Kampf-Hinweise über einer Legion
+function floatText(L, text, cls) {
+  const B = G.cur;
+  if (!B || G.demo) return;
+  stage.project(L.x, B.map.getHeight(L.x, L.z) + 6.5, L.z, _pp);
+  if (!_pp.visible) return;
+  const d = document.createElement('div');
+  // aus Sicht des Spielers: schlecht für uns = rot, gut für uns = gold
+  const mine = L.side === 0;
+  const tone = cls === 'warn' ? 'warn' : ((cls === 'bad') === mine ? 'bad' : 'good');
+  d.className = 'ftxt ' + tone;
+  d.textContent = text;
+  d.style.left = _pp.x + 'px';
+  d.style.top = _pp.y + 'px';
+  $('#labels').appendChild(d);
+  setTimeout(() => d.remove(), 1700);
 }
 function hint(t) { $('#hint').textContent = t; }
 function banner(t) {
@@ -1044,6 +1086,10 @@ function processEvents(B) {
         if (!demo) { feed(`${legionTitle(ev.legion)} zieht sich zurück`, ev.side); sound.play('retreat', 0.8); }
         break;
       case 'rally': if (!demo) feed(`${legionTitle(ev.legion)} hat sich gesammelt`, ev.legion.side); break;
+      case 'float': floatText(ev.legion, ev.text, ev.cls); break;
+      case 'rout':
+        if (!demo) { feed(`${legionTitle(ev.legion)} bricht und flieht!`, ev.side); sound.play('retreat', 0.9); }
+        break;
       case 'legionlost':
         if (!demo) feed(`${legionTitle(ev.legion)} wurde vernichtet`, ev.side);
         if (G.phase === 'battle' && G.sel.includes(ev.legion)) setSel(G.sel.filter((l) => l.alive));
@@ -1131,6 +1177,11 @@ function showHelp() {
   <li>Mit Auswahl: <b>Boden antippen</b> = dorthin marschieren (Gruppen in Formation, gleiches Tempo) · <b>Feind antippen</b> = angreifen</li>
   <li>Mit Auswahl: <b>lang drücken & ziehen</b> = Zielpunkt und Blickrichtung festlegen</li>
   <li>✋ Halt · ↩ Rückzug · ☰ Befehle (Detailbefehle) · Legionen-Leiste: lang drücken = zur Auswahl hinzufügen</li></ul>
+  <h4>Moral, Ausdauer & Flanken – so gewinnst du</h4>
+  <ul><li><b>Moral</b> (blauer Balken unter der Legion): Verluste, Angriffe in <b>Flanke</b> oder <b>Rücken</b>, <b>Umzingelung</b>, Pfeilhagel und fliehende Nachbarn senken sie. Unter 30 % <b>wankt</b> die Legion (⚠), bei 0 <b>flieht</b> sie (⚑) und ist nicht mehr steuerbar, bis sie sich gesammelt hat.</li>
+  <li><b>Ausdauer</b>: Laufen und Kämpfen ermüdet (💤 = erschöpft, schwächer und langsamer). Wer wartet, kämpft ausgeruht.</li>
+  <li><b>Frontbreite</b>: Nur die vorderen Reihen kämpfen. Greifst du einen gebundenen Feind zusätzlich von der Seite an, bringst du viel mehr Männer ins Gefecht.</li>
+  <li>Tipp: Binde den Feind frontal mit Infanterie, dann Reiter oder zweite Legion in Flanke/Rücken.</li></ul>
   <h4>Taktik</h4>
   <ul><li><b>Pikeniere</b> brechen Reiterangriffe (×2,6 Schaden gegen Reiter).</li>
   <li><b>Reiterei</b> zerschlägt Bogenschützen und trifft mit Sturmangriff hart – am besten in Flanke oder Rücken.</li>

@@ -24,7 +24,7 @@ for (const sc of SCENARIO_ORDER) {
     autoDeploy(bot, map.zones[1], 1, map, rng);
     botOrders(bot, sc, map, 'normal', rng);
     if (process.env.MIRROR) botOrders(player, sc, map, 'normal', rng);
-    const b = new Battle(map, [...player, ...bot], SCENARIOS[sc]);
+    const b = new Battle(map, process.env.SWAP ? [...bot, ...player] : [...player, ...bot], SCENARIOS[sc]);
     const brain = new BotBrain(b, 'normal', rng);
     const brain0 = process.env.MIRROR ? new BotBrain(b, 'normal', rng, 0) : null;
     const stuck = player.concat(bot).filter((L) => !map.isPassable(L.x, L.z, L.side));

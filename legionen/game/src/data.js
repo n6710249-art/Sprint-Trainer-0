@@ -4,6 +4,10 @@ export const UNIT_TYPES = {
   legion: {
     id: 'legion', value: 1.0, size: 32, cols: 8, spacing: 1.25,
     hp: 10, atk: 3.2, def: 3.0, speed: 2.7, range: 0,
+    perks: [
+      { icon: '🗡', name: 'Pilum-Salve', desc: 'Wirft kurz vor dem Zusammenprall Speere: Sofortschaden und Moralschock (alle 30 s).' },
+      { icon: '🛡', name: 'Disziplin', desc: 'Verliert 20 % weniger Moral. In Block-Formation: Pfeilschaden halbiert (Schildkröte).' },
+    ],
     names: ['Legionäre', 'Plünderer'],
     desc: ['Schwert & Scutum. Der verlässliche Kern jeder Armee.', 'Axt & Rundschild. Wild und zäh.'],
     stats: { Angriff: 3, Abwehr: 3, Tempo: 3, 'Reichw.': 1 },
@@ -11,6 +15,11 @@ export const UNIT_TYPES = {
   pike: {
     id: 'pike', value: 0.9, size: 36, cols: 9, spacing: 1.2,
     hp: 10, atk: 2.6, def: 2.8, speed: 2.25, range: 0, vsCav: 2.6,
+    perks: [
+      { icon: '🔱', name: 'Speerwall', desc: 'Steht die Legion still, zerschellen Reiterangriffe an ihr. ×2,6 Schaden gegen Reiter.' },
+      { icon: '📏', name: 'Lange Piken', desc: 'Drei Reihen kämpfen gleichzeitig (+50 % Frontbreite).' },
+      { icon: '⚠', name: 'Schwerfällig', desc: 'Nimmt +25 % Schaden, wenn in Flanke oder Rücken angegriffen.' },
+    ],
     names: ['Pikeniere', 'Speermänner'],
     desc: ['Lange Piken. Brechen jeden Reiterangriff.', 'Speerwall gegen Reiter.'],
     stats: { Angriff: 2, Abwehr: 3, Tempo: 2, 'Reichw.': 2 },
@@ -18,6 +27,11 @@ export const UNIT_TYPES = {
   archer: {
     id: 'archer', value: 0.75, size: 24, cols: 8, spacing: 1.35,
     hp: 8, atk: 1.4, def: 1.2, speed: 2.8, range: 36, volley: 2.9, arrowDmg: 3.6,
+    perks: [
+      { icon: '🔥', name: 'Brandpfeile', desc: 'Salven erschüttern die Moral des Ziels zusätzlich.' },
+      { icon: '⛰', name: 'Hochstand', desc: 'Von erhöhter Position +20 % Reichweite und Treffer.' },
+      { icon: '💨', name: 'Plänkler', desc: 'Weicht anrückender Infanterie aus; schwach im Nahkampf.' },
+    ],
     names: ['Bogenschützen', 'Jäger'],
     desc: ['Pfeilhagel auf große Distanz. Schwach im Nahkampf.', 'Tödliche Schützen aus dem Hinterhalt.'],
     stats: { Angriff: 3, Abwehr: 1, Tempo: 3, 'Reichw.': 5 },
@@ -25,6 +39,11 @@ export const UNIT_TYPES = {
   cavalry: {
     id: 'cavalry', value: 1.25, size: 20, cols: 5, spacing: 1.9,
     hp: 16, atk: 3.5, def: 2.4, speed: 5.4, range: 0, charge: 2.3,
+    perks: [
+      { icon: '🐎', name: 'Sturmangriff', desc: 'Mit Anlauf: wuchtiger Aufprall, großer Moralschock – im Rücken verheerend.' },
+      { icon: '↩', name: 'Hit & Run', desc: 'Löst sich nach einigen Sekunden Nahkampf und greift erneut mit Anlauf an.' },
+      { icon: '🎯', name: 'Verfolger', desc: '+50 % Schaden gegen fliehende Einheiten und Schützen.' },
+    ],
     names: ['Reiterei', 'Wolfsreiter'],
     desc: ['Schnell und wuchtig. Sturmangriff in Flanke und Rücken.', 'Schnelle Reiter für Überfälle.'],
     stats: { Angriff: 4, Abwehr: 2, Tempo: 5, 'Reichw.': 1 },
@@ -32,6 +51,11 @@ export const UNIT_TYPES = {
   guard: {
     id: 'guard', value: 1.3, size: 24, cols: 6, spacing: 1.3,
     hp: 14, atk: 3.3, def: 5.0, speed: 2.1, range: 0, arrowResist: 0.45,
+    perks: [
+      { icon: '🦅', name: 'Standarte', desc: 'Verbündete im Umkreis erholen Moral schneller und verlieren 15 % weniger.' },
+      { icon: '🗿', name: 'Unerschütterlich', desc: 'Halbe Moralverluste; flieht erst unter 30 % Stärke.' },
+      { icon: '🧱', name: 'Turmschilde', desc: 'Nur 45 % Schaden durch Pfeile.' },
+    ],
     names: ['Prätorianer', 'Eisenwache'],
     desc: ['Elite mit Turmschilden. Hält jede Stellung, trotzt Pfeilen.', 'Schwer gepanzerte Elite.'],
     stats: { Angriff: 4, Abwehr: 5, Tempo: 1, 'Reichw.': 1 },
@@ -40,6 +64,12 @@ export const UNIT_TYPES = {
 export const TYPE_ORDER = ['legion', 'pike', 'archer', 'cavalry', 'guard'];
 
 // Fraktionsfarben (Rollen → Farben)
+// Wappenfarbe je Legion (Schildembleme, Querkamm, Pferdedecken-Borte)
+export const ACCENTS = [
+  [0xe3b441, 0xc4302b, 0xf2f2ee, 0x3fae6a, 0x9a5ad0],
+  [0xe8e0cc, 0xd07a2a, 0x2b2b30, 0x7a9a3a, 0x7fb8d8],
+];
+
 export const FACTIONS = [
   {
     id: 0, name: 'Löwenlegion', short: 'Du',
@@ -48,6 +78,7 @@ export const FACTIONS = [
       primary: 0x2f63c4, secondary: 0xe3b441, metal: 0xc9ced6, helm: 0xd9a93a,
       crest: 0xc4302b, skin: 0xe2b18c, dark: 0x4a3524, wood: 0x8a5a32, cloth: 0xefe6d2,
       horse: 0x7a4b2a, mane: 0x2a1c12, banner: 0x2f63c4, hood: 0x3f6a45,
+      silver: 0xe8ecf2, leather: 0x6a4a2a, fur: 0x5a4632, furL: 0x8a7a6a, hairB: 0x4a3020, hairR: 0x9a4a20, hairG: 0xc8a860, tunic2: 0x2f63c4, tunic3: 0x2f63c4, horse2: 0x7a4b2a,
     },
   },
   {
@@ -57,6 +88,7 @@ export const FACTIONS = [
       primary: 0xa3231c, secondary: 0x2b2b30, metal: 0x6f737c, helm: 0x55585f,
       crest: 0xe8e0cc, skin: 0xd8a27c, dark: 0x2a2320, wood: 0x5d3d22, cloth: 0x3a3a40,
       horse: 0x3b3431, mane: 0x151212, banner: 0xa3231c, hood: 0x2b2b30,
+      silver: 0x9a9ea6, leather: 0x4a3424, fur: 0x5a4632, furL: 0x8c7c6a, hairB: 0x3a2618, hairR: 0x9a4a20, hairG: 0xc8a860, tunic2: 0x6e2418, tunic3: 0x4a3a2a, horse2: 0x6a6660,
     },
   },
 ];
